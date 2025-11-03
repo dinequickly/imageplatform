@@ -27,7 +27,10 @@ function toResponseInput(messages = []) {
     .filter(msg => typeof msg?.content === 'string' && msg.content.trim())
     .map(msg => ({
       role: msg.role === 'assistant' ? 'assistant' : 'user',
-      content: [{ type: 'text', text: msg.content.trim() }],
+      content: [{
+        type: msg.role === 'assistant' ? 'output_text' : 'input_text',
+        text: msg.content.trim(),
+      }],
     }))
 }
 
@@ -126,4 +129,3 @@ export async function runAssistantChat({ apiKey, messages, context = {}, tempera
 }
 
 export { parseAssistantOutput }
-
