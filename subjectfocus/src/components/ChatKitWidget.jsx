@@ -9,28 +9,64 @@ export default function ChatKitWidget({ workflowId }) {
 
   // Ensure the ChatKit browser script is available (some blockers can prevent it)
   useEffect(() => {
-    function markReady() {
+    let cancelled = false
+    const scriptSrc = 'https://cdn.platform.openai.com/deployments/chatkit/chatkit.js'
+
+    const isDefined = () => typeof window !== 'undefined' && !!window.customElements?.get('openai-chatkit')
+    const markReady = () => {
+      if (cancelled) return
+      setError('')
       setLibReady(true)
     }
-    // If already present, mark ready
-    if (window.ChatKit || window.OpenAIChatKit) markReady()
-    // Otherwise, try to inject the script
-    else {
-      const existing = document.querySelector('script[data-chatkit-loader]')
-      if (!existing) {
-        const s = document.createElement('script')
-        s.src = 'https://cdn.platform.openai.com/deployments/chatkit/chatkit.js'
-        s.async = true
-        s.dataset.chatkitLoader = 'true'
-        s.onload = markReady
-        s.onerror = () => setError('Failed to load ChatKit library (blocked by network/extension?).')
-        document.body.appendChild(s)
+    const markFailure = () => {
+      if (cancelled) return
+      setError('Failed to load ChatKit library (blocked by network, CSP, or extension?)')
+    }
+
+    if (isDefined()) {
+      markReady()
+      return () => {
+        cancelled = true
       }
-      // Give it a moment in case it loads later
-      const t = setTimeout(() => {
-        if (window.ChatKit || window.OpenAIChatKit) markReady()
-      }, 1500)
-      return () => clearTimeout(t)
+    }
+
+    // Wait for the custom element definition if the script loads later.
+    const waitForDefinition = window.customElements?.whenDefined?.('openai-chatkit')
+    waitForDefinition?.then(() => {
+      if (isDefined()) markReady()
+    }).catch(() => markFailure())
+
+    const handleLoad = () => {
+      if (isDefined()) markReady()
+    }
+    const handleError = () => {
+      markFailure()
+    }
+
+    const selector = `script[src="${scriptSrc}"]`
+    let script = document.querySelector(selector)
+    if (!script) {
+      script = document.createElement('script')
+      script.src = scriptSrc
+      script.async = true
+      script.dataset.chatkitLoader = 'true'
+      script.addEventListener('load', handleLoad, { once: true })
+      script.addEventListener('error', handleError, { once: true })
+      document.body.appendChild(script)
+    } else {
+      script.addEventListener('load', handleLoad, { once: true })
+      script.addEventListener('error', handleError, { once: true })
+    }
+
+    const fallbackTimer = window.setTimeout(() => {
+      if (!isDefined()) markFailure()
+    }, 5000)
+
+    return () => {
+      cancelled = true
+      script?.removeEventListener('load', handleLoad)
+      script?.removeEventListener('error', handleError)
+      clearTimeout(fallbackTimer)
     }
   }, [])
   const { control } = useChatKit({
