@@ -94,16 +94,15 @@ export default function StudyGuideAIPanel({ context = {}, onContentUpdate }) {
         },
       ]))
 
-      // If there's HTML content, offer to insert it
+      // If there's HTML content, auto-insert it
       if (content && typeof onContentUpdate === 'function') {
+        onContentUpdate(content)
         setMessages(prev => ([
           ...prev,
           {
-            id: `system-insert-${Date.now()}`,
+            id: `system-inserted-${Date.now()}`,
             role: 'system',
-            content: 'Content generated! Click "Insert" below to add it to your guide.',
-            insertable: true,
-            insertContent: content,
+            content: 'Content inserted into your guide!',
           },
         ]))
       }
@@ -121,20 +120,6 @@ export default function StudyGuideAIPanel({ context = {}, onContentUpdate }) {
     }
   }
 
-  function handleInsert(content) {
-    if (typeof onContentUpdate === 'function') {
-      onContentUpdate(content)
-      setMessages(prev => ([
-        ...prev,
-        {
-          id: `system-inserted-${Date.now()}`,
-          role: 'system',
-          content: 'Content inserted into editor!',
-        },
-      ]))
-    }
-  }
-
   function onKeyDown(e) {
     if (e.key === 'Enter' && !e.shiftKey) {
       e.preventDefault()
@@ -147,26 +132,16 @@ export default function StudyGuideAIPanel({ context = {}, onContentUpdate }) {
       <div ref={listRef} className="flex-1 overflow-y-auto p-3 space-y-3 text-sm">
         {messages.map(msg => (
           <div key={msg.id} className={`flex ${msg.role === 'user' ? 'justify-end' : msg.role === 'system' ? 'justify-center' : 'justify-start'}`}>
-            <div className="flex flex-col items-stretch w-full max-w-[75%]">
-              <div
-                className={[
-                  'rounded-lg px-3 py-2 whitespace-pre-wrap break-words',
-                  msg.role === 'user' && 'bg-indigo-600 text-white',
-                  msg.role === 'assistant' && 'bg-gray-100 text-gray-900',
-                  msg.role === 'system' && 'bg-transparent text-xs text-gray-500 italic shadow-none',
-                  msg.error && 'border border-red-300 text-red-700 bg-red-50',
-                ].filter(Boolean).join(' ')}
-              >
-                {msg.content}
-              </div>
-              {msg.insertable && msg.insertContent && (
-                <button
-                  onClick={() => handleInsert(msg.insertContent)}
-                  className="mt-2 px-3 py-1.5 bg-indigo-600 text-white rounded text-xs hover:bg-indigo-700"
-                >
-                  Insert into Guide
-                </button>
-              )}
+            <div
+              className={[
+                'max-w-[75%] rounded-lg px-3 py-2 whitespace-pre-wrap break-words',
+                msg.role === 'user' && 'bg-indigo-600 text-white',
+                msg.role === 'assistant' && 'bg-gray-100 text-gray-900',
+                msg.role === 'system' && 'bg-transparent text-xs text-gray-500 italic shadow-none',
+                msg.error && 'border border-red-300 text-red-700 bg-red-50',
+              ].filter(Boolean).join(' ')}
+            >
+              {msg.content}
             </div>
           </div>
         ))}
