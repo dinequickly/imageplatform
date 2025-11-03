@@ -144,25 +144,6 @@ export default function StudyGuidesList() {
                   >
                     Open
                   </button>
-                  <div className="relative group">
-                    <button className="px-3 py-1.5 border rounded text-sm hover:bg-gray-50">
-                      Export ▾
-                    </button>
-                    <div className="absolute right-0 mt-1 w-32 bg-white border rounded shadow-lg hidden group-hover:block z-10">
-                      <button
-                        onClick={() => {/* Will implement in editor */}}
-                        className="block w-full text-left px-3 py-2 text-sm hover:bg-gray-50"
-                      >
-                        Markdown
-                      </button>
-                      <button
-                        onClick={() => {/* Will implement in editor */}}
-                        className="block w-full text-left px-3 py-2 text-sm hover:bg-gray-50"
-                      >
-                        PDF
-                      </button>
-                    </div>
-                  </div>
                   <button
                     onClick={() => deleteGuide(guide.id)}
                     className="px-3 py-1.5 border rounded text-sm text-red-600 hover:bg-red-50"
