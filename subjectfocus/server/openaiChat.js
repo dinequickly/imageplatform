@@ -82,6 +82,7 @@ export async function runAssistantChat({ apiKey, messages, context = {}, tempera
     input: toResponseInput(messages),
     tools: [
       {
+        name: 'create_flashcard',
         type: 'function',
         function: {
           name: 'create_flashcard',
