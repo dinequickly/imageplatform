@@ -132,9 +132,13 @@ export default function StudyGuideEditor() {
   }), [setData, cards, editor, user, id])
 
   function handleContentUpdate(htmlContent) {
+    console.log('Received content to insert:', htmlContent)
     if (editor && htmlContent) {
       // Insert at current cursor position or append to end
       editor.chain().focus().insertContent(htmlContent).run()
+      console.log('Content inserted into editor')
+    } else {
+      console.log('Missing editor or content:', { editor: !!editor, htmlContent })
     }
   }
 

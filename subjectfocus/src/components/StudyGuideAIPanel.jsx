@@ -70,6 +70,8 @@ export default function StudyGuideAIPanel({ context = {}, onContentUpdate }) {
       }
       if (context?.user_id) payload.user_id = context.user_id
 
+      console.log('Sending payload to API:', payload)
+
       const res = await fetch('/api/chat', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -82,6 +84,7 @@ export default function StudyGuideAIPanel({ context = {}, onContentUpdate }) {
       }
 
       const { message, content } = await res.json()
+      console.log('AI Response:', { message, content })
 
       setMessages(prev => prev.filter(msg => msg.id !== pendingIdRef.current))
       const reply = message?.trim() ? message.trim() : 'Done!'
@@ -95,7 +98,8 @@ export default function StudyGuideAIPanel({ context = {}, onContentUpdate }) {
       ]))
 
       // If there's HTML content, auto-insert it
-      if (content && typeof onContentUpdate === 'function') {
+      if (content && content.trim() && typeof onContentUpdate === 'function') {
+        console.log('Calling onContentUpdate with:', content)
         onContentUpdate(content)
         setMessages(prev => ([
           ...prev,
@@ -105,6 +109,23 @@ export default function StudyGuideAIPanel({ context = {}, onContentUpdate }) {
             content: 'Content inserted into your guide!',
           },
         ]))
+      } else {
+        console.log('No content to insert or missing callback:', {
+          content,
+          contentLength: content?.length,
+          hasCallback: typeof onContentUpdate === 'function'
+        })
+        if (!content || !content.trim()) {
+          setMessages(prev => ([
+            ...prev,
+            {
+              id: `system-no-content-${Date.now()}`,
+              role: 'system',
+              content: 'No content was generated. Try being more specific in your request.',
+              error: true,
+            },
+          ]))
+        }
       }
     } catch (err) {
       console.error('Chat send error', err)
