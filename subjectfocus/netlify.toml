@@ -8,7 +8,6 @@
   status = 200
 
 [[redirects]]
-  from = "/api/chatkit/session"
-  to = "/.netlify/functions/chatkit-session"
+  from = "/api/chat"
+  to = "/.netlify/functions/chat"
   status = 200
-

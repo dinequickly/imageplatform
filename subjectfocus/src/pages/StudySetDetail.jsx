@@ -2,7 +2,7 @@ import { useEffect, useMemo, useRef, useState } from 'react'
 import { useNavigate, useParams } from 'react-router-dom'
 import { supabase } from '../supabaseClient'
 import { useAuth } from '../hooks/useAuth'
-import ChatKitWidget from '../components/ChatKitWidget'
+import AIChatPanel from '../components/AIChatPanel'
 
 export default function StudySetDetail() {
   const { id } = useParams()
@@ -178,17 +178,28 @@ export default function StudySetDetail() {
     }
   }
 
-  // Expose a global hook for optimistic card adds (used by chat/agent)
-  useEffect(() => {
-    window.handleNewFlashcard = (newFlashcard) => {
-      // map expected fields to our shape
-      const q = newFlashcard?.question || newFlashcard?.term
-      const a = newFlashcard?.answer || newFlashcard?.definition
-      if (!q || !a) return
-      setCards(prev => [...prev, { id: newFlashcard.id || crypto.randomUUID(), question: q, answer: a }])
+  const chatContext = useMemo(() => ({
+    title: setData?.title,
+    subject: setData?.subject_area,
+    description: setData?.description,
+    cards: cards.map(card => ({ term: card.question, definition: card.answer })),
+  }), [setData, cards])
+
+  async function handleAIFlashcard({ term, definition }) {
+    const payload = {
+      study_set_id: id,
+      question: term.trim(),
+      answer: definition.trim(),
     }
-    return () => { delete window.handleNewFlashcard }
-  }, [])
+    const { data, error } = await supabase
+      .from('flashcards')
+      .insert(payload)
+      .select('id, question, answer')
+      .single()
+    if (error) throw new Error(error.message)
+    setCards(prev => [...prev, data])
+    setSetData(prev => (prev ? { ...prev, total_cards: (prev.total_cards ?? cards.length) + 1 } : prev))
+  }
 
   if (loading) return <div className="p-6">Loading...</div>
   if (error) return <div className="p-6 text-red-600">{error}</div>
@@ -303,9 +314,8 @@ export default function StudySetDetail() {
             </div>
 
             <div className="pt-2 border-t space-y-2">
-              <div className="text-sm text-gray-600">Chat</div>
-              <ChatKitWidget workflowId="wf_6907e8b911c881909b036fee34d733300fde86d3184a9aa3" />
-              <div className="text-xs text-gray-500">Use window.handleNewFlashcard({`{ term, definition }`}) for optimistic add.</div>
+              <div className="text-sm text-gray-600">AI Assistant</div>
+              <AIChatPanel context={chatContext} onFlashcard={handleAIFlashcard} />
             </div>
           </div>
         </aside>

@@ -1,12 +1,11 @@
-import { useEffect, useState } from 'react'
+import { useMemo, useState } from 'react'
 import { useNavigate } from 'react-router-dom'
 import { supabase } from '../supabaseClient'
 import { useAuth } from '../hooks/useAuth'
-import ChatKitWidget from '../components/ChatKitWidget'
+import AIChatPanel from '../components/AIChatPanel'
 
 const SUBJECTS = ['Biology','Chemistry','Physics','Math','History','English','Computer Science','Other']
 const COLORS = ['#6366f1','#ef4444','#10b981','#f59e0b','#3b82f6','#8b5cf6']
-const CHATKIT_WORKFLOW_ID = 'wf_6907e8b911c881909b036fee34d733300fde86d3184a9aa3'
 
 export default function CreateStudySet() {
   const { user } = useAuth()
@@ -21,22 +20,23 @@ export default function CreateStudySet() {
   const [cards, setCards] = useState([{ id: 1, term: '', definition: '' }])
   const navigate = useNavigate()
 
-  useEffect(() => {
-    window.handleNewFlashcard = (incoming) => {
-      const term = incoming?.question || incoming?.term
-      const definition = incoming?.answer || incoming?.definition
-      if (!term || !definition) return
-      setCards(prev => [
-        ...prev,
-        {
-          id: (prev.at(-1)?.id ?? 0) + 1,
-          term,
-          definition,
-        },
-      ])
-    }
-    return () => { delete window.handleNewFlashcard }
-  }, [])
+  const chatContext = useMemo(() => ({
+    title: title || undefined,
+    subject: subject || undefined,
+    description: description || undefined,
+    cards: cards.map(card => ({ term: card.term, definition: card.definition })),
+  }), [title, subject, description, cards])
+
+  async function handleAIFlashcard({ term, definition }) {
+    setCards(prev => ([
+      ...prev,
+      {
+        id: (prev.at(-1)?.id ?? 0) + 1,
+        term: term.trim(),
+        definition: definition.trim(),
+      },
+    ]))
+  }
 
   function updateCard(id, field, value) {
     setCards(cs => cs.map(c => (c.id === id ? { ...c, [field]: value } : c)))
@@ -147,9 +147,8 @@ export default function CreateStudySet() {
         <aside className="lg:col-span-5 space-y-4">
           <div className="border rounded p-4 space-y-3">
             <div className="font-medium">AI Flashcard Assistant</div>
-            <p className="text-sm text-gray-600">Use ChatKit to brainstorm concepts and definitions. New suggestions appear in the form below once inserted.</p>
-            <ChatKitWidget workflowId={CHATKIT_WORKFLOW_ID} />
-            <div className="text-xs text-gray-500">If the widget stays blank, confirm the <a className="underline" href="https://cdn.platform.openai.com/deployments/chatkit/chatkit.js" target="_blank" rel="noreferrer">chatkit.js</a> script loads and that extensions allow cross-site embeds.</div>
+            <p className="text-sm text-gray-600">Brainstorm ideas or paste notes and I’ll craft flashcards. Cards I create are added to your list automatically.</p>
+            <AIChatPanel context={chatContext} onFlashcard={handleAIFlashcard} />
           </div>
         </aside>
       </div>
