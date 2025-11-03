@@ -1,6 +1,6 @@
 import { createClient } from '@supabase/supabase-js'
 
-const MODEL = process.env.OPENAI_ASSISTANT_MODEL || 'gpt-4o-mini'
+const MODEL = process.env.OPENAI_ASSISTANT_MODEL || 'gpt-5-mini'
 const SUPABASE_URL = process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL
 const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY
 
