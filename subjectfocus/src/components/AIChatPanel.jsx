@@ -102,10 +102,12 @@ export default function AIChatPanel({ context = {}, onFlashcard }) {
       .map(msg => ({ role: msg.role, content: msg.content }))
 
     try {
+      const payload = { messages: history, context: trimmedContext }
+      if (context?.user_id) payload.user_id = context.user_id
       const res = await fetch('/api/chat', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ messages: history, context: trimmedContext }),
+        body: JSON.stringify(payload),
       })
 
       if (!res.ok) {

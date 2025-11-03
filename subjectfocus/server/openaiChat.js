@@ -95,7 +95,7 @@ function parseAssistantOutput(data) {
   return { message, flashcards }
 }
 
-export async function runAssistantChat({ apiKey, messages, context = {}, temperature }) {
+export async function runAssistantChat({ apiKey, messages, context = {}, temperature, user_id }) {
   if (!apiKey) throw new Error('Missing OPENAI_API_KEY')
 
   const instructions = [SYSTEM_PROMPT, formatContext(context)].filter(Boolean).join('\n\n')
@@ -174,6 +174,7 @@ export async function runAssistantChat({ apiKey, messages, context = {}, tempera
             study_set_id: targetId,
             question: card.term,
             answer: card.definition,
+            user_id,
           })
           .select('id, question, answer')
           .single()

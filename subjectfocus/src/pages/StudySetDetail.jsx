@@ -180,11 +180,12 @@ export default function StudySetDetail() {
 
   const chatContext = useMemo(() => ({
     study_set_id: id,
+    user_id: user?.id,
     title: setData?.title,
     subject: setData?.subject_area,
     description: setData?.description,
     cards: cards.map(card => ({ term: card.question, definition: card.answer })),
-  }), [setData, cards])
+  }), [setData, cards, user])
 
   async function handleAIFlashcard(card) {
     if (card.error) throw new Error(card.error)

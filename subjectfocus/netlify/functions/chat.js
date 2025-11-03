@@ -12,13 +12,14 @@ export async function handler(event) {
 
   try {
     const body = event.body ? JSON.parse(event.body) : {}
-    const { messages = [], context = {}, temperature } = body
+    const { messages = [], context = {}, temperature, user_id } = body
 
     const { message, flashcards } = await runAssistantChat({
       apiKey,
       messages,
       context,
       temperature,
+      user_id,
     })
 
     return {
@@ -37,4 +38,3 @@ export async function handler(event) {
     }
   }
 }
-

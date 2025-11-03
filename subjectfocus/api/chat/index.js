@@ -13,13 +13,14 @@ export default async function handler(req, res) {
       return
     }
 
-    const { messages = [], context = {}, temperature } = req.body || {}
+    const { messages = [], context = {}, temperature, user_id } = req.body || {}
 
     const { message, flashcards } = await runAssistantChat({
       apiKey,
       messages,
       context,
       temperature,
+      user_id,
     })
     res.status(200).json({ message, flashcards })
   } catch (error) {
