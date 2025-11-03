@@ -86,10 +86,10 @@ export async function runAssistantChat({ apiKey, messages, context = {}, tempera
       {
         name: 'create_flashcard',
         type: 'function',
-        strict: true,
         function: {
           name: 'create_flashcard',
           description: 'Create a concise flashcard with a term and definition.',
+          strict: true,
           parameters: {
             type: 'object',
             additionalProperties: false,
