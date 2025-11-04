@@ -15,6 +15,7 @@ import CreatePodcast from './pages/CreatePodcast'
 import PodcastPlayer from './pages/PodcastPlayer'
 import LiveInteractivePodcast from './pages/LiveInteractivePodcast'
 import LiveTutorSession from './pages/LiveTutorSession'
+import CanvasSync from './pages/CanvasSync'
 
 export default function App() {
   return (
@@ -117,6 +118,14 @@ export default function App() {
             element={
               <ProtectedRoute>
                 <LiveTutorSession />
+              </ProtectedRoute>
+            }
+          />
+          <Route
+            path="/canvas/sync"
+            element={
+              <ProtectedRoute>
+                <CanvasSync />
               </ProtectedRoute>
             }
           />

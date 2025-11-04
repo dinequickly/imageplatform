@@ -22,6 +22,11 @@ export default function NavBar() {
           {showCreate && (
             <Link to="/study-set/new" className="px-3 py-1.5 rounded bg-indigo-600 text-white text-sm">Create Study Set</Link>
           )}
+          {user && (
+            <Link to="/canvas/sync" className="px-3 py-1.5 rounded border border-gray-300 text-gray-700 text-sm hover:bg-gray-50">
+              Canvas Sync
+            </Link>
+          )}
           {user ? (
             <>
               <span className="text-sm text-gray-600">{user.email}</span>
