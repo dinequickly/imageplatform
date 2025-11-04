@@ -1,43 +1,43 @@
 import { useState, useEffect } from 'react'
 import { Link } from 'react-router-dom'
+import { BookOpen, CheckCircle, AlertCircle, Loader2 } from 'lucide-react'
 import { supabase } from '../supabaseClient'
 import { useAuth } from '../hooks/useAuth'
+import CourseSelectionModal from '../components/CourseSelectionModal'
+import CourseOnboardingModal from '../components/CourseOnboardingModal'
 
 export default function CanvasSync() {
   const { user } = useAuth()
   const [syncedCourses, setSyncedCourses] = useState([])
   const [loading, setLoading] = useState(true)
-  const [syncing, setSyncing] = useState(false)
-  const [syncProgress, setSyncProgress] = useState({ current: 0, total: 0, currentCourse: '' })
+  const [showCourseSelection, setShowCourseSelection] = useState(false)
+  const [selectedCourseForOnboarding, setSelectedCourseForOnboarding] = useState(null)
+  const [polling, setPolling] = useState(false)
   const [message, setMessage] = useState({ type: '', text: '' })
-
-  const CANVAS_TOKEN = import.meta.env.VITE_CANVAS_TOKEN
-  const CANVAS_DOMAIN = import.meta.env.VITE_CANVAS_DOMAIN
-
-  // Helper function to call Canvas API through proxy
-  async function callCanvasAPI(endpoint) {
-    const response = await fetch('/api/canvas-proxy', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({
-        endpoint,
-        canvasToken: CANVAS_TOKEN,
-        canvasDomain: CANVAS_DOMAIN
-      })
-    })
-
-    if (!response.ok) {
-      const error = await response.json()
-      throw new Error(error.error || 'Canvas API request failed')
-    }
-
-    return response.json()
-  }
 
   useEffect(() => {
     if (!user) return
     loadSyncedCourses()
   }, [user])
+
+  useEffect(() => {
+    // Check if we need to poll for pending courses
+    const hasPendingCourses = syncedCourses.some(
+      course => course.onboarding_status === 'pending'
+    )
+
+    if (hasPendingCourses && !polling) {
+      setPolling(true)
+      const interval = setInterval(async () => {
+        await loadSyncedCourses()
+      }, 3000) // Poll every 3 seconds
+
+      return () => {
+        clearInterval(interval)
+        setPolling(false)
+      }
+    }
+  }, [syncedCourses, polling])
 
   async function loadSyncedCourses() {
     try {
@@ -53,7 +53,8 @@ export default function CanvasSync() {
         `)
         .eq('user_id', user.id)
         .is('deleted_at', null)
-        .order('last_synced_at', { ascending: false })
+        .order('last_synced_at', { ascending: false, nullsFirst: false })
+        .order('created_at', { ascending: false })
 
       if (error) throw error
       setSyncedCourses(data || [])
@@ -65,242 +66,28 @@ export default function CanvasSync() {
     }
   }
 
-  async function syncAllCourses() {
-    if (!CANVAS_TOKEN || !CANVAS_DOMAIN) {
-      setMessage({ type: 'error', text: 'Canvas credentials not configured. Please check environment variables.' })
-      return
-    }
+  function handleCoursesSelected(count) {
+    setShowCourseSelection(false)
+    setMessage({
+      type: 'success',
+      text: `${count} course${count !== 1 ? 's' : ''} synced! Click any course to complete setup.`
+    })
+    loadSyncedCourses()
+  }
 
-    setSyncing(true)
-    setMessage({ type: '', text: '' })
-
-    let totalCourses = 0
-    let totalAssignments = 0
-    let totalFlashcardSets = 0
-
-    try {
-      // Step 1: Fetch all active courses
-      setSyncProgress({ current: 0, total: 0, currentCourse: 'Fetching courses from Canvas...' })
-
-      const courses = await callCanvasAPI('/api/v1/courses?enrollment_state=active&per_page=100')
-      totalCourses = courses.length
-      setSyncProgress({ current: 0, total: totalCourses, currentCourse: 'Processing courses...' })
-
-      // Step 2: Process each course
-      for (let i = 0; i < courses.length; i++) {
-        const course = courses[i]
-        setSyncProgress({
-          current: i + 1,
-          total: totalCourses,
-          currentCourse: `Processing: ${course.name}`
-        })
-
-        try {
-          // A. Check if course already exists
-          const { data: existingCourse } = await supabase
-            .from('canvas_courses')
-            .select('id, study_set_id, deleted_at')
-            .eq('user_id', user.id)
-            .eq('canvas_course_id', course.id.toString())
-            .single()
-
-          // Skip if course was previously deleted
-          if (existingCourse?.deleted_at) {
-            console.log(`Skipping deleted course: ${course.name}`)
-            continue
-          }
-
-          let studySetId
-          let canvasCourseId
-
-          if (existingCourse) {
-            // Update existing course
-            studySetId = existingCourse.study_set_id
-            canvasCourseId = existingCourse.id
-
-            await supabase
-              .from('canvas_courses')
-              .update({
-                course_name: course.name,
-                course_code: course.course_code,
-                last_synced_at: new Date().toISOString()
-              })
-              .eq('id', existingCourse.id)
-          } else {
-            // B. Create new study set
-            const { data: studySet, error: studySetError } = await supabase
-              .from('study_sets')
-              .insert({
-                user_id: user.id,
-                title: course.name,
-                subject_area: course.course_code || 'Canvas Import',
-                description: `Imported from Canvas: ${course.name}`
-              })
-              .select()
-              .single()
-
-            if (studySetError) throw studySetError
-            studySetId = studySet.id
-
-            // C. Save course to database
-            const { data: canvasCourse, error: courseError } = await supabase
-              .from('canvas_courses')
-              .insert({
-                user_id: user.id,
-                canvas_course_id: course.id.toString(),
-                course_name: course.name,
-                course_code: course.course_code,
-                start_date: course.start_at,
-                end_date: course.end_at,
-                study_set_id: studySetId,
-                last_synced_at: new Date().toISOString()
-              })
-              .select()
-              .single()
-
-            if (courseError) throw courseError
-            canvasCourseId = canvasCourse.id
-          }
-
-          // D. Fetch assignments for the course
-          try {
-            const assignments = await callCanvasAPI(`/api/v1/courses/${course.id}/assignments?per_page=100`)
-            totalAssignments += assignments.length
-
-            // E. Process each assignment
-            for (const assignment of assignments) {
-              // Check if assignment already exists
-              const { data: existingAssignment } = await supabase
-                .from('canvas_assignments')
-                .select('id')
-                .eq('canvas_assignment_id', assignment.id.toString())
-                .eq('canvas_course_id', canvasCourseId)
-                .single()
-
-              if (!existingAssignment) {
-                // Save new assignment to database
-                await supabase
-                  .from('canvas_assignments')
-                  .insert({
-                    canvas_course_id: canvasCourseId,
-                    canvas_assignment_id: assignment.id.toString(),
-                    assignment_name: assignment.name,
-                    assignment_description: assignment.description,
-                    due_date: assignment.due_at,
-                    points_possible: assignment.points_possible,
-                    flashcards_generated: false
-                  })
-
-                // F. If assignment has description, generate flashcards
-                if (assignment.description && assignment.description.trim().length > 50) {
-                  totalFlashcardSets++
-                  // Fire webhook asynchronously (fire-and-forget)
-                  setTimeout(() => {
-                    fetch('https://maxipad.app.n8n.cloud/webhook/generate-flashcards-from-canvas', {
-                      method: 'POST',
-                      headers: { 'Content-Type': 'application/json' },
-                      body: JSON.stringify({
-                        study_set_id: studySetId,
-                        assignment_name: assignment.name,
-                        assignment_description: assignment.description,
-                        due_date: assignment.due_at
-                      })
-                    }).catch(err => console.error('Webhook error:', err))
-                  }, 0)
-                }
-              }
-            }
-          } catch (assignmentError) {
-            console.error(`Error fetching assignments for course ${course.name}:`, assignmentError)
-            // Continue with next course
-          }
-        } catch (courseError) {
-          console.error(`Error processing course ${course.name}:`, courseError)
-          // Continue with next course
-        }
-      }
-
-      setMessage({
-        type: 'success',
-        text: `Successfully synced ${totalCourses} courses, ${totalAssignments} assignments, and initiated ${totalFlashcardSets} flashcard generations.`
-      })
-
-      // Reload synced courses
-      await loadSyncedCourses()
-
-    } catch (err) {
-      console.error('Sync error:', err)
-      setMessage({ type: 'error', text: err.message || 'Failed to sync courses' })
-    } finally {
-      setSyncing(false)
-      setSyncProgress({ current: 0, total: 0, currentCourse: '' })
+  function handleCourseClick(course) {
+    if (course.onboarding_status === 'pending' || course.onboarding_status === 'in_progress') {
+      setSelectedCourseForOnboarding(course)
     }
   }
 
-  async function resyncCourse(courseId, canvasCourseId) {
-    try {
-      setMessage({ type: '', text: '' })
-
-      // Fetch course details
-      const course = await callCanvasAPI(`/api/v1/courses/${canvasCourseId}`)
-
-      // Update last synced timestamp
-      await supabase
-        .from('canvas_courses')
-        .update({ last_synced_at: new Date().toISOString() })
-        .eq('id', courseId)
-
-      // Fetch and process assignments (same logic as above)
-      const assignments = await callCanvasAPI(`/api/v1/courses/${canvasCourseId}/assignments?per_page=100`)
-      const { data: canvasCourse } = await supabase
-        .from('canvas_courses')
-        .select('study_set_id')
-        .eq('id', courseId)
-        .single()
-
-      for (const assignment of assignments) {
-        const { data: existingAssignment } = await supabase
-          .from('canvas_assignments')
-          .select('id')
-          .eq('canvas_assignment_id', assignment.id.toString())
-          .eq('canvas_course_id', courseId)
-          .single()
-
-        if (!existingAssignment && assignment.description && assignment.description.trim().length > 50) {
-          await supabase
-            .from('canvas_assignments')
-            .insert({
-              canvas_course_id: courseId,
-              canvas_assignment_id: assignment.id.toString(),
-              assignment_name: assignment.name,
-              assignment_description: assignment.description,
-              due_date: assignment.due_at,
-              points_possible: assignment.points_possible,
-              flashcards_generated: false
-            })
-
-          // Fire webhook
-          setTimeout(() => {
-            fetch('https://maxipad.app.n8n.cloud/webhook/generate-flashcards-from-canvas', {
-              method: 'POST',
-              headers: { 'Content-Type': 'application/json' },
-              body: JSON.stringify({
-                study_set_id: canvasCourse.study_set_id,
-                assignment_name: assignment.name,
-                assignment_description: assignment.description,
-                due_date: assignment.due_at
-              })
-            }).catch(err => console.error('Webhook error:', err))
-          }, 0)
-        }
-      }
-
-      setMessage({ type: 'success', text: `Re-synced ${course.name}` })
-      await loadSyncedCourses()
-    } catch (err) {
-      console.error('Re-sync error:', err)
-      setMessage({ type: 'error', text: 'Failed to re-sync course' })
-    }
+  function handleOnboardingComplete() {
+    setSelectedCourseForOnboarding(null)
+    setMessage({
+      type: 'success',
+      text: 'Course setup complete! Your content is ready.'
+    })
+    loadSyncedCourses()
   }
 
   async function deleteCourse(courseId, courseName) {
@@ -327,10 +114,38 @@ export default function CanvasSync() {
     }
   }
 
+  function getStatusBadge(course) {
+    if (course.onboarding_status === 'completed') {
+      return (
+        <span className="inline-flex items-center gap-1 px-2 py-1 text-xs font-medium bg-green-100 text-green-800 rounded-full">
+          <CheckCircle size={12} />
+          Ready
+        </span>
+      )
+    } else if (course.onboarding_status === 'in_progress') {
+      return (
+        <span className="inline-flex items-center gap-1 px-2 py-1 text-xs font-medium bg-blue-100 text-blue-800 rounded-full">
+          <Loader2 size={12} className="animate-spin" />
+          Processing
+        </span>
+      )
+    } else {
+      return (
+        <span className="inline-flex items-center gap-1 px-2 py-1 text-xs font-medium bg-yellow-100 text-yellow-800 rounded-full">
+          <AlertCircle size={12} />
+          Setup Required
+        </span>
+      )
+    }
+  }
+
   if (loading) {
     return (
       <div className="max-w-6xl mx-auto p-4">
-        <div className="text-center py-8">Loading...</div>
+        <div className="flex items-center justify-center py-12">
+          <Loader2 className="animate-spin text-gray-400" size={32} />
+          <span className="ml-3 text-gray-600">Loading...</span>
+        </div>
       </div>
     )
   }
@@ -339,51 +154,27 @@ export default function CanvasSync() {
     <div className="max-w-6xl mx-auto p-4">
       {/* Header */}
       <div className="mb-6">
-        <h1 className="text-2xl font-bold mb-2">Canvas Integration</h1>
-        <p className="text-gray-600">Sync your Canvas courses and automatically generate study materials from assignments.</p>
+        <h1 className="text-3xl font-bold text-gray-900 mb-2">Canvas Integration</h1>
+        <p className="text-gray-600">
+          Connect your Canvas courses and AI will automatically create study materials from your course content.
+        </p>
       </div>
 
-      {/* Sync Button */}
+      {/* Connect Button */}
       <div className="mb-6">
         <button
-          onClick={syncAllCourses}
-          disabled={syncing}
-          className="px-4 py-2 bg-indigo-600 text-white rounded hover:bg-indigo-700 disabled:bg-gray-400 disabled:cursor-not-allowed"
+          onClick={() => setShowCourseSelection(true)}
+          className="inline-flex items-center gap-2 px-6 py-3 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors font-medium shadow-sm"
         >
-          {syncing ? 'Syncing...' : 'Sync Canvas Courses'}
+          <BookOpen size={20} />
+          Connect Canvas Courses
         </button>
       </div>
-
-      {/* Progress Indicator */}
-      {syncing && (
-        <div className="mb-6 p-4 bg-blue-50 border border-blue-200 rounded">
-          <div className="mb-2">
-            <div className="text-sm font-medium text-blue-900">
-              {syncProgress.currentCourse}
-            </div>
-            {syncProgress.total > 0 && (
-              <div className="text-xs text-blue-700">
-                Progress: {syncProgress.current} / {syncProgress.total} courses
-              </div>
-            )}
-          </div>
-          <div className="w-full bg-blue-200 rounded-full h-2">
-            <div
-              className="bg-indigo-600 h-2 rounded-full transition-all duration-300"
-              style={{
-                width: syncProgress.total > 0
-                  ? `${(syncProgress.current / syncProgress.total) * 100}%`
-                  : '0%'
-              }}
-            />
-          </div>
-        </div>
-      )}
 
       {/* Messages */}
       {message.text && (
         <div
-          className={`mb-6 p-4 rounded ${
+          className={`mb-6 p-4 rounded-lg ${
             message.type === 'success'
               ? 'bg-green-50 border border-green-200 text-green-800'
               : 'bg-red-50 border border-red-200 text-red-800'
@@ -395,59 +186,114 @@ export default function CanvasSync() {
 
       {/* Synced Courses List */}
       <div>
-        <h2 className="text-xl font-semibold mb-4">Synced Courses</h2>
+        <h2 className="text-xl font-semibold text-gray-900 mb-4">Your Courses</h2>
         {syncedCourses.length === 0 ? (
-          <div className="text-center py-8 border rounded bg-gray-50">
-            <p className="text-gray-600">No courses synced yet. Click "Sync Canvas Courses" to get started.</p>
+          <div className="text-center py-12 border-2 border-dashed border-gray-300 rounded-lg bg-gray-50">
+            <BookOpen className="mx-auto text-gray-400 mb-3" size={48} />
+            <p className="text-gray-600 mb-2">No courses connected yet</p>
+            <p className="text-sm text-gray-500">
+              Click "Connect Canvas Courses" to get started
+            </p>
           </div>
         ) : (
           <div className="grid gap-4 grid-cols-1 md:grid-cols-2 lg:grid-cols-3">
-            {syncedCourses.map((course) => (
-              <div key={course.id} className="border rounded p-4 bg-white hover:shadow-md transition-shadow">
-                <div className="mb-3">
-                  <h3 className="font-semibold text-lg">{course.course_name}</h3>
-                  <p className="text-sm text-gray-600">{course.course_code}</p>
-                </div>
+            {syncedCourses.map((course) => {
+              const isReady = course.onboarding_status === 'completed'
+              const needsSetup = course.onboarding_status === 'pending' || course.onboarding_status === 'in_progress'
 
-                <div className="mb-3 space-y-1">
-                  <div className="text-sm">
-                    <span className="text-gray-600">Cards: </span>
-                    <span className="font-medium">{course.study_sets?.total_cards || 0}</span>
-                  </div>
-                  <div className="text-xs text-gray-500">
-                    Last synced: {new Date(course.last_synced_at).toLocaleDateString()}
-                  </div>
-                </div>
-
-                <div className="space-y-2">
-                  <div className="flex gap-2">
-                    {course.study_set_id && (
-                      <Link
-                        to={`/study-set/${course.study_set_id}`}
-                        className="flex-1 px-3 py-1.5 text-sm text-center bg-indigo-600 text-white rounded hover:bg-indigo-700"
-                      >
-                        View Study Set
-                      </Link>
+              return (
+                <div
+                  key={course.id}
+                  className={`border rounded-lg p-5 bg-white hover:shadow-md transition-all ${
+                    needsSetup ? 'cursor-pointer hover:border-blue-400' : ''
+                  }`}
+                  onClick={() => needsSetup && handleCourseClick(course)}
+                >
+                  {/* Header */}
+                  <div className="mb-4">
+                    <div className="flex items-start justify-between gap-2 mb-2">
+                      <h3 className="font-semibold text-lg text-gray-900 leading-tight">
+                        {course.course_name}
+                      </h3>
+                      {getStatusBadge(course)}
+                    </div>
+                    {course.course_code && (
+                      <p className="text-sm text-gray-600">{course.course_code}</p>
                     )}
-                    <button
-                      onClick={() => resyncCourse(course.id, course.canvas_course_id)}
-                      className="px-3 py-1.5 text-sm border border-gray-300 rounded hover:bg-gray-50"
-                    >
-                      Re-sync
-                    </button>
+                    {course.term && (
+                      <p className="text-xs text-gray-500 mt-1">{course.term}</p>
+                    )}
                   </div>
-                  <button
-                    onClick={() => deleteCourse(course.id, course.course_name)}
-                    className="w-full px-3 py-1.5 text-sm border border-red-300 text-red-600 rounded hover:bg-red-50"
-                  >
-                    Remove Course
-                  </button>
+
+                  {/* Stats */}
+                  {isReady && (
+                    <div className="mb-4 pb-4 border-b">
+                      <div className="text-sm">
+                        <span className="text-gray-600">Flashcards: </span>
+                        <span className="font-medium text-gray-900">
+                          {course.study_sets?.total_cards || 0}
+                        </span>
+                      </div>
+                      {course.items_vectorized > 0 && (
+                        <div className="text-xs text-gray-500 mt-1">
+                          {course.items_vectorized} items vectorized
+                        </div>
+                      )}
+                    </div>
+                  )}
+
+                  {/* Actions */}
+                  <div className="space-y-2">
+                    {isReady ? (
+                      <>
+                        {course.study_set_id && (
+                          <Link
+                            to={`/study-set/${course.study_set_id}`}
+                            className="block px-4 py-2 text-sm text-center bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors font-medium"
+                          >
+                            Open Study Set
+                          </Link>
+                        )}
+                        <button
+                          onClick={(e) => {
+                            e.stopPropagation()
+                            deleteCourse(course.id, course.course_name)
+                          }}
+                          className="w-full px-4 py-2 text-sm border border-red-300 text-red-600 rounded-lg hover:bg-red-50 transition-colors"
+                        >
+                          Remove Course
+                        </button>
+                      </>
+                    ) : (
+                      <div className="text-center py-2">
+                        <p className="text-sm text-gray-600">
+                          {course.onboarding_status === 'in_progress'
+                            ? 'Setting up course...'
+                            : 'Click to complete setup'}
+                        </p>
+                      </div>
+                    )}
+                  </div>
                 </div>
-              </div>
-            ))}
+              )
+            })}
           </div>
         )}
       </div>
+
+      {/* Modals */}
+      <CourseSelectionModal
+        isOpen={showCourseSelection}
+        onClose={() => setShowCourseSelection(false)}
+        onCoursesSelected={handleCoursesSelected}
+      />
+
+      <CourseOnboardingModal
+        course={selectedCourseForOnboarding}
+        isOpen={!!selectedCourseForOnboarding}
+        onClose={() => setSelectedCourseForOnboarding(null)}
+        onComplete={handleOnboardingComplete}
+      />
     </div>
   )
 }
