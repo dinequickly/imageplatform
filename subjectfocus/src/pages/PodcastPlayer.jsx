@@ -16,6 +16,13 @@ export default function PodcastPlayer() {
     fetchPodcast()
   }, [podcastId])
 
+  // Redirect to interactive page for live-interactive podcasts
+  useEffect(() => {
+    if (podcast && podcast.type === 'live-interactive') {
+      navigate(`/study-set/${id}/podcasts/${podcastId}/interactive`)
+    }
+  }, [podcast, id, podcastId, navigate])
+
   // Poll for status updates when generating
   useEffect(() => {
     if (!podcast || podcast.status !== 'generating') return

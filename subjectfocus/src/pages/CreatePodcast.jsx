@@ -36,6 +36,25 @@ export default function CreatePodcast() {
 
     try {
       // Create podcast record
+      // For live-interactive, we need to fetch flashcards first to generate the script
+      let script = null
+      if (formData.type === 'live-interactive') {
+        const { data: flashcards } = await supabase
+          .from('flashcards')
+          .select('question, answer')
+          .eq('study_set_id', id)
+          .is('deleted_at', null)
+          .limit(10)
+
+        // Generate a simple script from flashcards
+        if (flashcards && flashcards.length > 0) {
+          script = flashcards.map((card, index) => ({
+            speaker: index % 2 === 0 ? 'Host' : 'Expert',
+            text: `${card.question} ${card.answer}`
+          }))
+        }
+      }
+
       const { data: podcast, error: insertErr } = await supabase
         .from('podcasts')
         .insert({
@@ -45,15 +64,20 @@ export default function CreatePodcast() {
           type: formData.type,
           duration_minutes: formData.durationMinutes,
           user_goal: formData.userGoal.trim() || null,
-          status: 'generating'
+          status: formData.type === 'live-interactive' ? 'ready' : 'generating',
+          script: script
         })
         .select()
         .single()
 
       if (insertErr) throw insertErr
 
-      // Navigate to the player page (where generation will happen)
-      navigate(`/study-set/${id}/podcasts/${podcast.id}`)
+      // Navigate based on podcast type
+      if (formData.type === 'live-interactive') {
+        navigate(`/study-set/${id}/podcasts/${podcast.id}/interactive`)
+      } else {
+        navigate(`/study-set/${id}/podcasts/${podcast.id}`)
+      }
     } catch (err) {
       console.error('Create podcast error', err)
       setError(err.message || 'Failed to create podcast')

@@ -9,6 +9,7 @@
     "preview": "vite preview --port 4173"
   },
   "dependencies": {
+    "@elevenlabs/client": "^0.9.1",
     "@supabase/supabase-js": "^2.45.0",
     "@tiptap/extension-placeholder": "^3.10.1",
     "@tiptap/react": "^3.10.1",

@@ -4,7 +4,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Overview
 
-SubjectFocus is a study application built with Vite + React + Supabase. It enables students to create flashcard study sets with AI-powered assistance from OpenAI. The app features authentication, study set management, AI flashcard generation, and spaced repetition learning.
+SubjectFocus is a study application built with Vite + React + Supabase. It enables students to create flashcard study sets with AI-powered assistance from OpenAI. The app features authentication, study set management, AI flashcard generation, spaced repetition learning, study guides, and interactive podcasts.
 
 ## Development Commands
 
@@ -46,17 +46,26 @@ supabase db lint                                  # Check for invalid references
 - **Auth:** Supabase Auth with session persistence via `useAuth` hook
 - **State:** React hooks (no global state management)
 - **Styling:** Tailwind CSS
+- **Rich Text:** TipTap editor for study guides
 
 ### Key Routes
 - `/login`, `/signup` - Authentication
 - `/` - Dashboard (lists user's study sets)
 - `/study-set/new` - Create new study set with inline card creation
 - `/study-set/:id` - Study set detail page with right sidebar AI chat
+- `/study-set/:id/practice` - Practice mode for flashcards
+- `/study-set/:id/guides` - Study guides list for a study set
+- `/study-set/:id/guides/:guideId` - View study guide
+- `/study-set/:id/guides/:guideId/edit` - Edit study guide with TipTap editor
+- `/study-set/:id/podcasts` - Podcasts list for a study set
+- `/study-set/:id/podcasts/create` - Create new podcast
+- `/study-set/:id/podcasts/:podcastId` - Podcast player
 
 ### Components
 - `ProtectedRoute` - Wraps authenticated routes, redirects to `/login`
 - `NavBar` - Top navigation with user menu
-- `AIChatPanel` - Right sidebar for AI flashcard generation
+- `AIChatPanel` - Right sidebar for AI flashcard generation (mode: 'flashcard')
+- `StudyGuideAIPanel` - Right sidebar for AI study guide generation (mode: 'study_guide')
 
 ### Backend Architecture
 The app uses **serverless functions** deployed on Netlify OR Vercel (not both) to handle AI requests:
@@ -67,16 +76,28 @@ The app uses **serverless functions** deployed on Netlify OR Vercel (not both) t
    - Both call the shared logic in `server/openaiChat.js`
 
 2. **AI Chat Flow (`server/openaiChat.js`):**
-   - Receives messages, context, temperature, user_id
-   - Formats system prompt with study set context (title, subject, existing cards)
-   - Calls OpenAI API with structured JSON schema for flashcard responses
-   - **Auto-saves flashcards:** If `SUPABASE_SERVICE_ROLE_KEY` is set, function directly inserts flashcards into `public.flashcards` table using service role client
-   - Returns: `{ message, flashcards }` where flashcards include success/error status
+   - Receives messages, context, temperature, user_id, and optional maxTokens
+   - Context object can include `mode: 'study_guide'` or default to flashcard mode
+   - **Flashcard mode:**
+     - Formats system prompt with study set context (title, subject, existing cards)
+     - Calls OpenAI API with structured JSON schema: `{ message, flashcards: [{ term, definition }] }`
+     - **Auto-saves flashcards:** If `SUPABASE_SERVICE_ROLE_KEY` is set, function directly inserts flashcards into `public.flashcards` table using service role client
+     - Returns: `{ message, flashcards }` where flashcards include success/error status
+   - **Study guide mode:**
+     - Uses `STUDY_GUIDE_SYSTEM_PROMPT` with current guide content in context
+     - Enforces strict JSON schema: `{ message, content }` where content is HTML
+     - Content field has minLength: 200 and is required
+     - Returns HTML-formatted study guide sections to be inserted into TipTap editor
 
-3. **Frontend (`AIChatPanel`):**
-   - Sends POST to `/api/chat` with messages array and context object
-   - Context includes: `study_set_id`, `title`, `subject`, `description`, `cards` (last 10)
-   - Receives flashcards that may already be persisted (check for `id` field)
+3. **Frontend AI Panels:**
+   - `AIChatPanel` (flashcards):
+     - Sends POST to `/api/chat` with messages array and context object
+     - Context includes: `study_set_id`, `title`, `subject`, `description`, `cards` (last 10)
+     - Receives flashcards that may already be persisted (check for `id` field)
+   - `StudyGuideAIPanel` (study guides):
+     - Sends POST to `/api/chat` with context.mode = 'study_guide'
+     - Context includes: `study_set_id`, `title`, `subject`, `currentContent` (truncated to 15000 chars)
+     - Receives HTML content to insert into the TipTap editor
 
 ### Database Schema (Supabase)
 
@@ -86,16 +107,23 @@ The app uses **serverless functions** deployed on Netlify OR Vercel (not both) t
   - Has `total_cards` auto-maintained by trigger
   - Tracks `subject_area`, `color_theme`, `is_public`
 - `flashcards` - Cards within study sets
-  - Fields: `question`, `answer`, `hint`, `explanation`, `difficulty`, `starred`
+  - Fields: `question`, `answer`, `hint`, `explanation`, `difficulty_level`, `starred`
   - Soft delete via `deleted_at`
   - Trigger updates parent `study_sets.total_cards` on insert/delete
 - `flashcard_progress` - Spaced repetition tracking per user/card
   - Fields: `times_seen`, `times_correct`, `next_review_date`, `mastery_level`
 - `learning_sessions` - Session history with metrics
-- `generated_content` - AI-generated content (study guides, quizzes)
+- `generated_content` - AI-generated content (study guides, quizzes, podcasts, etc.)
+  - `content_type` enum: 'podcast', 'video', 'newsletter', 'study_guide', 'practice_test', 'brief', 'mindmap', 'quiz', 'flashcard_set'
+  - `status` enum: 'pending', 'generating', 'completed', 'failed'
+- `podcasts` - Podcast episodes (separate from generated_content)
+  - Fields: `study_set_id`, `user_id`, `title`, `type`, `duration_minutes`, `user_goal`, `status`, `audio_url`, `script`
+  - Status values: 'generating', 'completed', 'failed'
+  - Type values determine podcast format (pre-recorded, live-interactive, etc.)
 - `calendar_events` - Study schedule events
 - `tags`, `study_set_tags` - Tagging system
 - `study_set_collaborators` - Sharing with role-based access
+- `canvas_integrations`, `canvas_courses` - Canvas LMS integration
 
 **Important Views:**
 - `cards_due_for_review` - Joins flashcards + progress where `next_review_date <= now()`
@@ -122,7 +150,7 @@ VITE_SUPABASE_ANON_KEY=     # Supabase anon/public key
 ### Backend (Serverless Functions)
 ```bash
 OPENAI_API_KEY=                    # Required for AI chat
-OPENAI_ASSISTANT_MODEL=            # Optional (defaults to gpt-5-mini-2025-08-07)
+OPENAI_ASSISTANT_MODEL=            # Optional (defaults to gpt-5-mini)
 SUPABASE_URL=                      # Required for auto-saving flashcards
 SUPABASE_SERVICE_ROLE_KEY=         # Required for auto-saving (bypasses RLS)
 ```
@@ -137,11 +165,25 @@ Store frontend vars in `.env.local` at project root. For serverless, use platfor
 - Server-side persistence: flashcards are auto-inserted into DB by serverless function
 - Frontend should check if flashcards have `id` field (already saved) vs `error` field (save failed)
 
+### AI Study Guide Generation
+- Uses same `/api/chat` endpoint with `context.mode = 'study_guide'`
+- Strict JSON schema enforces `{ message, content }` where content is HTML (min 200 chars)
+- Context includes `currentContent` (last 15000 chars of existing guide)
+- Model returns HTML that gets inserted into TipTap editor
+- Study guides are stored separately in database (exact table TBD from schema)
+
 ### Spaced Repetition (Minimal Implementation)
 - Review flow fetches from `cards_due_for_review` view
 - On review: update `flashcard_progress` with results
 - Simple scheduling: correct → +1 day, incorrect → +10 minutes
 - Tracks: `mastery_level` (new/learning/reviewing/mastered), `interval_days`, `repetitions`
+
+### Podcasts
+- Users create podcasts linked to study sets
+- Podcast creation flow: CreatePodcast → insert into `podcasts` table with status='generating' → navigate to PodcastPlayer
+- PodcastPlayer polls for status updates every 3 seconds while status='generating'
+- Podcasts support different types (pre-recorded, live-interactive, etc.)
+- Script is stored as structured data in the `script` field
 
 ### Database Triggers
 - `update_study_set_card_count()` - Maintains `total_cards` count when flashcards inserted/deleted
@@ -173,7 +215,8 @@ Store frontend vars in `.env.local` at project root. For serverless, use platfor
 5. Commit only reviewed migrations (delete scratch files)
 
 ### Migration Files
-- `supabase/migrations/00000000000000_initial_schema.sql` - Base schema
+- `supabase/migrations/00000000000000_initial_schema.sql` - Empty placeholder
+- `supabase/migrations/initial_schema.sql` - Actual base schema (1223 lines)
 - `supabase/migrations/` - Timestamped migration files
 - Use `supabase migration new "description"` to scaffold new migrations
 
