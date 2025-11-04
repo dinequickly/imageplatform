@@ -60,17 +60,19 @@ export default function LiveInteractivePodcast() {
 
       const formattedScript = formatScript(podcast.script)
 
+      // Debug logging
+      console.log('=== ELEVENLABS SESSION DEBUG ===')
+      console.log('Agent ID:', agentId)
+      console.log('Topic:', podcast.user_goal || podcast.title)
+      console.log('Raw script from DB:', podcast.script)
+      console.log('Formatted script being sent:', formattedScript)
+      console.log('================================')
+
       const conv = await Conversation.startSession({
         agentId: agentId,
-        overrides: {
-          agent: {
-            prompt: {
-              variables: {
-                topic: podcast.user_goal || podcast.title,
-                script: formattedScript
-              }
-            }
-          }
+        dynamicVariables: {
+          topic: podcast.user_goal || podcast.title,
+          script: formattedScript
         },
         onConnect: () => {
           console.log('Connected to ElevenLabs')
@@ -280,6 +282,32 @@ export default function LiveInteractivePodcast() {
             </div>
           </div>
         </div>
+
+        {/* Debug Section - Script Preview */}
+        {podcast?.script && (
+          <div className="mt-8 bg-gray-900 rounded-xl shadow-sm border border-gray-700 p-6">
+            <details className="group">
+              <summary className="text-sm font-semibold text-gray-100 cursor-pointer hover:text-white flex items-center gap-2">
+                <span>🔍 Debug: View Script Being Sent to AI</span>
+                <span className="text-gray-500 group-open:hidden">(click to expand)</span>
+              </summary>
+              <div className="mt-4 space-y-3">
+                <div>
+                  <div className="text-xs font-medium text-gray-400 mb-1">Raw Script from Database:</div>
+                  <pre className="bg-gray-800 rounded p-3 text-xs text-green-400 overflow-x-auto">
+                    {JSON.stringify(podcast.script, null, 2)}
+                  </pre>
+                </div>
+                <div>
+                  <div className="text-xs font-medium text-gray-400 mb-1">Formatted Script (sent to ElevenLabs):</div>
+                  <pre className="bg-gray-800 rounded p-3 text-xs text-blue-400 overflow-x-auto whitespace-pre-wrap">
+                    {formatScript(podcast.script)}
+                  </pre>
+                </div>
+              </div>
+            </details>
+          </div>
+        )}
 
         {/* Tips Section */}
         <div className="mt-8 bg-white rounded-xl shadow-sm border border-gray-200 p-6">
