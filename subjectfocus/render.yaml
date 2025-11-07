@@ -1,0 +1,12 @@
+services:
+  - type: web
+    name: canvas-dump-api
+    env: python
+    plan: free
+    buildCommand: pip install -r requirements-canvas-api.txt
+    startCommand: uvicorn appcanvas:app --host 0.0.0.0 --port $PORT
+    envVars:
+      - key: SUBJECTFOCUS_API_KEY
+        sync: false
+      - key: CANVAS_TOKEN
+        sync: false

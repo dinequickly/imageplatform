@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react'
 import { X, CheckCircle } from 'lucide-react'
 import { supabase } from '../supabaseClient'
+import AIBenefitsPreviewModal from './AIBenefitsPreviewModal'
 
 const CATEGORY_LABELS = {
   'exercises_assignments': 'Exercises & Assignments',
@@ -16,6 +17,7 @@ const CATEGORY_LABELS = {
 const RECOMMENDED_CATEGORIES = ['exercises_assignments']
 
 export default function CourseOnboardingModal({ course, isOpen, onClose, onComplete }) {
+  const [step, setStep] = useState('preview') // 'preview' or 'setup'
   const [categoryCounts, setCategoryCounts] = useState({})
   const [selectedCategories, setSelectedCategories] = useState(['exercises_assignments'])
   const [loading, setLoading] = useState(true)
@@ -25,39 +27,117 @@ export default function CourseOnboardingModal({ course, isOpen, onClose, onCompl
 
   useEffect(() => {
     if (isOpen && course) {
+      setStep('preview') // Reset to preview when modal opens
       loadCategoryCounts()
     }
   }, [isOpen, course])
 
+  const handleContinueFromPreview = () => {
+    setStep('setup')
+  }
+
+  const handleClosePreview = () => {
+    setStep('preview') // Reset step
+    onClose()
+  }
+
   useEffect(() => {
     if (vectorizing) {
+      console.log('[CourseOnboarding] Starting progress polling...')
       // Poll for vectorization progress
       const interval = setInterval(async () => {
         const { data } = await supabase
           .from('canvas_courses')
-          .select('items_vectorized, total_items_to_vectorize, vectorization_status')
+          .select('items_vectorized, total_items_to_vectorize, vectorization_status, onboarding_status')
           .eq('id', course.id)
           .single()
 
         if (data) {
+          console.log('[CourseOnboarding] Progress update:', {
+            vectorized: data.items_vectorized,
+            total: data.total_items_to_vectorize,
+            vectorization_status: data.vectorization_status,
+            onboarding_status: data.onboarding_status
+          })
+
           setProgress({
             current: data.items_vectorized || 0,
             total: data.total_items_to_vectorize || 0
           })
 
-          if (data.vectorization_status === 'completed') {
+          // Check both vectorization_status and onboarding_status
+          if (data.vectorization_status === 'completed' || data.onboarding_status === 'completed') {
+            console.log('[CourseOnboarding] ✓ Course setup completed!')
             setVectorizing(false)
+
+            // Update onboarding_status to completed if not already
+            if (data.onboarding_status !== 'completed') {
+              await supabase
+                .from('canvas_courses')
+                .update({ onboarding_status: 'completed' })
+                .eq('id', course.id)
+            }
+
             onComplete()
           } else if (data.vectorization_status === 'failed') {
+            console.error('[CourseOnboarding] ✗ Vectorization failed')
             setVectorizing(false)
             setError('Vectorization failed. Please try again.')
           }
         }
       }, 2000) // Poll every 2 seconds
 
-      return () => clearInterval(interval)
+      return () => {
+        console.log('[CourseOnboarding] Stopping progress polling')
+        clearInterval(interval)
+      }
     }
   }, [vectorizing, course?.id])
+
+  // Add Realtime subscription for live updates
+  useEffect(() => {
+    if (!isOpen || !course) return
+
+    console.log('[CourseOnboarding] Setting up Realtime subscription for course:', course.id)
+
+    const channel = supabase
+      .channel(`course-${course.id}-onboarding`)
+      .on(
+        'postgres_changes',
+        {
+          event: 'UPDATE',
+          schema: 'public',
+          table: 'canvas_courses',
+          filter: `id=eq.${course.id}`
+        },
+        (payload) => {
+          console.log('[CourseOnboarding] Realtime update received:', payload.new)
+
+          const newData = payload.new
+
+          // Update progress
+          if (newData.items_vectorized !== undefined || newData.total_items_to_vectorize !== undefined) {
+            setProgress({
+              current: newData.items_vectorized || 0,
+              total: newData.total_items_to_vectorize || 0
+            })
+          }
+
+          // Check if completed
+          if (newData.onboarding_status === 'completed' || newData.vectorization_status === 'completed') {
+            console.log('[CourseOnboarding] ✓ Course completed via Realtime!')
+            setVectorizing(false)
+            onComplete()
+          }
+        }
+      )
+      .subscribe()
+
+    return () => {
+      console.log('[CourseOnboarding] Cleaning up Realtime subscription')
+      supabase.removeChannel(channel)
+    }
+  }, [isOpen, course?.id])
 
   const loadCategoryCounts = async () => {
     setLoading(true)
@@ -144,6 +224,12 @@ export default function CourseOnboardingModal({ course, isOpen, onClose, onCompl
 
       // Fire webhook to start vectorization (fire and forget)
       setTimeout(() => {
+        console.log('[CourseOnboarding] Firing vectorize webhook:', {
+          course_id: course.id,
+          course_name: course.course_name,
+          selected_categories: selectedCategories,
+          total_items: totalItems
+        })
         fetch('https://maxipad.app.n8n.cloud/webhook/vectorize', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
@@ -153,7 +239,13 @@ export default function CourseOnboardingModal({ course, isOpen, onClose, onCompl
             canvas_token: import.meta.env.VITE_CANVAS_TOKEN,
             canvas_domain: import.meta.env.VITE_CANVAS_DOMAIN
           })
-        }).catch(err => console.error('Webhook error:', err))
+        })
+          .then(res => {
+            console.log('[CourseOnboarding] Webhook response:', res.status, res.statusText)
+            return res.json()
+          })
+          .then(data => console.log('[CourseOnboarding] Webhook data:', data))
+          .catch(err => console.error('[CourseOnboarding] Webhook error:', err))
       }, 0)
 
       // Start polling for progress
@@ -166,6 +258,19 @@ export default function CourseOnboardingModal({ course, isOpen, onClose, onCompl
 
   if (!isOpen || !course) return null
 
+  // Show preview modal first
+  if (step === 'preview') {
+    return (
+      <AIBenefitsPreviewModal
+        course={course}
+        isOpen={isOpen}
+        onClose={handleClosePreview}
+        onContinue={handleContinueFromPreview}
+      />
+    )
+  }
+
+  // Then show setup modal
   const totalSelectedItems = selectedCategories.reduce(
     (sum, cat) => sum + (categoryCounts[cat] || 0),
     0
@@ -181,7 +286,10 @@ export default function CourseOnboardingModal({ course, isOpen, onClose, onCompl
             <p className="text-sm text-gray-600 mt-1">{course.course_name}</p>
           </div>
           <button
-            onClick={onClose}
+            onClick={() => {
+              setStep('preview')
+              onClose()
+            }}
             disabled={vectorizing}
             className="text-gray-400 hover:text-gray-600 disabled:opacity-50"
           >
@@ -282,7 +390,10 @@ export default function CourseOnboardingModal({ course, isOpen, onClose, onCompl
             </div>
             <div className="flex gap-3">
               <button
-                onClick={onClose}
+                onClick={() => {
+                  setStep('preview')
+                  onClose()
+                }}
                 className="px-4 py-2 border border-gray-300 rounded-lg text-gray-700 hover:bg-gray-100"
               >
                 Cancel

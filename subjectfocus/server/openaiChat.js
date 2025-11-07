@@ -6,6 +6,7 @@ import { createClient } from '@supabase/supabase-js'
 const MODEL = process.env.OPENAI_ASSISTANT_MODEL || 'gpt-5-mini'
 const SUPABASE_URL = process.env.SUPABASE_URL || process.env.VITE_SUPABASE_URL
 const SUPABASE_SERVICE_ROLE_KEY = process.env.SUPABASE_SERVICE_ROLE_KEY
+const API_BASE_URL = process.env.API_BASE_URL || 'http://localhost:8888'
 
 const supabaseService = SUPABASE_URL && SUPABASE_SERVICE_ROLE_KEY
   ? createClient(SUPABASE_URL, SUPABASE_SERVICE_ROLE_KEY, { auth: { persistSession: false } })
@@ -71,7 +72,48 @@ function truncate(str, max) {
   return str.length <= max ? str : str.slice(-max)
 }
 
-function formatContext(context = {}) {
+/**
+ * Fetch Canvas content via vector search for RAG
+ * Returns relevant chunks from linked Canvas courses
+ */
+async function getCanvasContext(query, studySetId, userId) {
+  try {
+    if (!studySetId || !userId) {
+      console.log('Skipping canvas context: missing studySetId or userId')
+      return []
+    }
+
+    console.log('Fetching canvas context for query:', query)
+    const endpoint = `${API_BASE_URL}/api/vector-search`
+    console.log('Calling vector search endpoint:', endpoint)
+
+    const response = await fetch(endpoint, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        query,
+        study_set_id: studySetId,
+        user_id: userId,
+        match_count: 5,
+        match_threshold: 0.7
+      })
+    })
+
+    if (!response.ok) {
+      console.error('Vector search response error:', response.status, response.statusText)
+      return []
+    }
+
+    const { results } = await response.json()
+    console.log('Canvas context results:', results?.length || 0)
+    return results || []
+  } catch (error) {
+    console.error('Failed to fetch canvas context:', error?.message || error)
+    return []
+  }
+}
+
+function formatContext(context = {}, canvasChunks = []) {
   const MAX_CTX = 15000 // chars to keep for currentContent
   const parts = []
   const isStudyGuide = context.mode === 'study_guide'
@@ -102,6 +144,14 @@ function formatContext(context = {}) {
     }
   }
 
+  // Add Canvas course materials if available
+  if (Array.isArray(canvasChunks) && canvasChunks.length > 0) {
+    const courseContent = canvasChunks
+      .map((chunk, i) => `[Source ${i + 1}: ${chunk.item_name} (${chunk.item_type})]\n${truncate(chunk.chunk_text, 1000)}`)
+      .join('\n\n---\n\n')
+    parts.push(`Relevant course materials from Canvas:\n${courseContent}`)
+  }
+
   if (!parts.length) return ''
   return `
 
@@ -124,7 +174,18 @@ export async function runAssistantChat({
 
   const isStudyGuide = context.mode === 'study_guide'
   const systemPrompt = isStudyGuide ? STUDY_GUIDE_SYSTEM_PROMPT : FLASHCARD_SYSTEM_PROMPT
-  const systemMessage = systemPrompt + formatContext(context)
+
+  // Fetch Canvas content for RAG (for both flashcard and study guide modes)
+  let canvasChunks = []
+  if (messages && messages.length > 0 && context.study_set_id && user_id) {
+    // Get the user's latest message as the query
+    const lastUserMessage = messages[messages.length - 1]?.content
+    if (lastUserMessage) {
+      canvasChunks = await getCanvasContext(lastUserMessage, context.study_set_id, user_id)
+    }
+  }
+
+  const systemMessage = systemPrompt + formatContext(context, canvasChunks)
 
   // Define response schema based on mode
   const responseSchema = isStudyGuide

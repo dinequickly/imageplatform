@@ -21,23 +21,62 @@ export default function CanvasSync() {
   }, [user])
 
   useEffect(() => {
-    // Check if we need to poll for pending courses
-    const hasPendingCourses = syncedCourses.some(
-      course => course.onboarding_status === 'pending'
+    // Check if we need to poll for pending/in_progress courses
+    const hasActiveCourses = syncedCourses.some(
+      course => course.onboarding_status === 'pending' ||
+                course.onboarding_status === 'in_progress' ||
+                course.vectorization_status === 'in_progress'
     )
 
-    if (hasPendingCourses && !polling) {
+    if (hasActiveCourses && !polling) {
+      console.log('[CanvasSync] Starting course status polling (active courses detected)')
       setPolling(true)
       const interval = setInterval(async () => {
+        console.log('[CanvasSync] Polling for course updates...')
         await loadSyncedCourses()
       }, 3000) // Poll every 3 seconds
 
       return () => {
+        console.log('[CanvasSync] Stopping course status polling')
         clearInterval(interval)
         setPolling(false)
       }
+    } else if (!hasActiveCourses && polling) {
+      // Stop polling when all courses are done
+      console.log('[CanvasSync] All courses completed, stopping polling')
+      setPolling(false)
     }
   }, [syncedCourses, polling])
+
+  // Add Realtime subscription for live updates
+  useEffect(() => {
+    if (!user) return
+
+    console.log('[CanvasSync] Setting up Realtime subscription')
+
+    const channel = supabase
+      .channel('canvas-courses-changes')
+      .on(
+        'postgres_changes',
+        {
+          event: 'UPDATE',
+          schema: 'public',
+          table: 'canvas_courses',
+          filter: `user_id=eq.${user.id}`
+        },
+        (payload) => {
+          console.log('[CanvasSync] Realtime update received:', payload.new)
+          // Reload courses when any update happens
+          loadSyncedCourses()
+        }
+      )
+      .subscribe()
+
+    return () => {
+      console.log('[CanvasSync] Cleaning up Realtime subscription')
+      supabase.removeChannel(channel)
+    }
+  }, [user])
 
   async function loadSyncedCourses() {
     try {
@@ -114,6 +153,32 @@ export default function CanvasSync() {
     }
   }
 
+  async function markAsCompleted(courseId, courseName) {
+    if (!confirm(`Mark "${courseName}" as ready?\n\nThis will mark the course as completed if vectorization has finished.`)) {
+      return
+    }
+
+    try {
+      setMessage({ type: '', text: '' })
+
+      const { error } = await supabase
+        .from('canvas_courses')
+        .update({
+          onboarding_status: 'completed',
+          vectorization_status: 'completed'
+        })
+        .eq('id', courseId)
+
+      if (error) throw error
+
+      setMessage({ type: 'success', text: `${courseName} marked as ready!` })
+      await loadSyncedCourses()
+    } catch (err) {
+      console.error('Mark complete error:', err)
+      setMessage({ type: 'error', text: 'Failed to update course status' })
+    }
+  }
+
   function getStatusBadge(course) {
     if (course.onboarding_status === 'completed') {
       return (
@@ -122,7 +187,7 @@ export default function CanvasSync() {
           Ready
         </span>
       )
-    } else if (course.onboarding_status === 'in_progress') {
+    } else if (course.onboarding_status === 'in_progress' || course.vectorization_status === 'in_progress') {
       return (
         <span className="inline-flex items-center gap-1 px-2 py-1 text-xs font-medium bg-blue-100 text-blue-800 rounded-full">
           <Loader2 size={12} className="animate-spin" />
@@ -226,7 +291,7 @@ export default function CanvasSync() {
                   </div>
 
                   {/* Stats */}
-                  {isReady && (
+                  {isReady ? (
                     <div className="mb-4 pb-4 border-b">
                       <div className="text-sm">
                         <span className="text-gray-600">Flashcards: </span>
@@ -240,6 +305,30 @@ export default function CanvasSync() {
                         </div>
                       )}
                     </div>
+                  ) : (
+                    /* Show progress for in-progress courses */
+                    needsSetup && (course.items_vectorized > 0 || course.total_items_to_vectorize > 0) && (
+                      <div className="mb-4 pb-4 border-b">
+                        <div className="text-sm text-gray-600 mb-2">
+                          Vectorizing content...
+                        </div>
+                        <div className="flex items-center gap-2">
+                          <div className="flex-1 bg-gray-200 rounded-full h-2 overflow-hidden">
+                            <div
+                              className="bg-blue-600 h-full transition-all duration-300"
+                              style={{
+                                width: course.total_items_to_vectorize > 0
+                                  ? `${(course.items_vectorized / course.total_items_to_vectorize) * 100}%`
+                                  : '0%'
+                              }}
+                            />
+                          </div>
+                          <span className="text-xs text-gray-500 whitespace-nowrap">
+                            {course.items_vectorized || 0} / {course.total_items_to_vectorize || 0}
+                          </span>
+                        </div>
+                      </div>
+                    )
                   )}
 
                   {/* Actions */}
@@ -265,13 +354,27 @@ export default function CanvasSync() {
                         </button>
                       </>
                     ) : (
-                      <div className="text-center py-2">
-                        <p className="text-sm text-gray-600">
-                          {course.onboarding_status === 'in_progress'
-                            ? 'Setting up course...'
-                            : 'Click to complete setup'}
-                        </p>
-                      </div>
+                      <>
+                        <div className="text-center py-2">
+                          <p className="text-sm text-gray-600">
+                            {course.onboarding_status === 'in_progress' || course.vectorization_status === 'in_progress'
+                              ? 'Setting up course...'
+                              : 'Click to complete setup'}
+                          </p>
+                        </div>
+                        {/* Show manual complete button if items are vectorized */}
+                        {course.items_vectorized > 0 && (
+                          <button
+                            onClick={(e) => {
+                              e.stopPropagation()
+                              markAsCompleted(course.id, course.course_name)
+                            }}
+                            className="w-full px-4 py-2 text-sm bg-green-600 text-white rounded-lg hover:bg-green-700 transition-colors"
+                          >
+                            Mark as Ready
+                          </button>
+                        )}
+                      </>
                     )}
                   </div>
                 </div>

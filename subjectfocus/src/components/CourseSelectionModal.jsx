@@ -134,6 +134,7 @@ export default function CourseSelectionModal({ isOpen, onClose, onCoursesSelecte
 
         // Fire webhook to sync course modules and categorize (fire and forget)
         setTimeout(() => {
+          console.log('[CourseSelection] Firing webhook for course:', course.name, canvasCourse.id)
           fetch('https://maxipad.app.n8n.cloud/webhook/canvas-sync-course', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
@@ -144,7 +145,13 @@ export default function CourseSelectionModal({ isOpen, onClose, onCoursesSelecte
               canvas_token: import.meta.env.VITE_CANVAS_TOKEN,
               canvas_domain: import.meta.env.VITE_CANVAS_DOMAIN
             })
-          }).catch(err => console.error('Webhook error:', err))
+          })
+            .then(res => {
+              console.log('[CourseSelection] Webhook response:', res.status, res.statusText)
+              return res.json()
+            })
+            .then(data => console.log('[CourseSelection] Webhook data:', data))
+            .catch(err => console.error('[CourseSelection] Webhook error:', err))
         }, 0)
       }
 

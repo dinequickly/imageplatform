@@ -1,0 +1,11 @@
+# Ignore everything except Canvas API files
+*
+
+# Then allow only what we need
+!appcanvas.py
+!canvas_dump_lib.py
+!canvas_dump_utils.py
+!requirements-canvas-api.txt
+!Procfile
+!railway.json
+!output/
