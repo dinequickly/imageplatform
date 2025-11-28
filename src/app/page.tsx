@@ -407,17 +407,21 @@ export default function Home() {
 
         setIsGenerating(false);
 
-        const proposalMsg: ChatMessage = {
-            id: uuidv4(),
-            role: 'assistant',
-            content: "Here is a prompt based on your request:",
-            type: 'proposal',
-            proposal: {
-                prompt: engineeredPrompt,
-                status: 'pending',
-                referenceImage: classificationResult.references && classificationResult.references.length > 0 ? classificationResult.references[0].imageUrl : undefined
-            }
-        };
+            const proposalMsg: ChatMessage = {
+                id: uuidv4(),
+                role: 'assistant',
+                content: "Here is a prompt based on your request:",
+                type: 'proposal',
+                proposal: {
+                    prompt: engineeredPrompt,
+                    status: 'pending',
+                    // Store the referenced images for generation
+                    referenceImages: classificationResult.references && classificationResult.references.length > 0 
+                        ? classificationResult.references.map(r => r.imageUrl) 
+                        : undefined
+                }
+            };
+
         setMessages(prev => [...prev, proposalMsg]);
         saveMessage(sessionId, proposalMsg);
         
@@ -432,8 +436,10 @@ export default function Home() {
   const handleProposalAccept = async (msgId: string, prompt: string) => {
     if (!sessionId) return;
 
+    // Find the message to get the reference images
     const message = messages.find(m => m.id === msgId);
-    const referenceImage = message?.proposal?.referenceImage;
+    const referenceImages = message?.proposal?.referenceImages;
+    const firstReferenceImage = referenceImages && referenceImages.length > 0 ? referenceImages[0] : undefined;
 
     setMessages(prev => prev.map(m => 
         m.id === msgId && m.proposal 
@@ -454,7 +460,7 @@ export default function Home() {
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({ 
                 prompt,
-                referenceImage
+                referenceImage: firstReferenceImage // Pass the first reference image URL if it exists
             })
         });
         const data = await response.json();
