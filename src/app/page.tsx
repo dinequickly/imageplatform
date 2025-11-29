@@ -21,6 +21,7 @@ export default function Home() {
   const [sessionId, setSessionId] = useState<string | null>(null);
   const [userId, setUserId] = useState<string | null>(null);
   const [showOnboarding, setShowOnboarding] = useState(false);
+  const [editingMoodItem, setEditingMoodItem] = useState<MoodBoardItem | null>(null); // New state
 
   const router = useRouter();
   const supabase = createClient();
@@ -536,15 +537,19 @@ export default function Home() {
   };
 
   const handleMoodBoardChange = async (newItems: MoodBoardItem[]) => {
+      // Identify removed items
       const removedItems = moodBoardItems.filter(item => !newItems.find(n => n.id === item.id));
       
+      // Re-index remaining items
       const reIndexedItems = newItems.map((item, index) => ({
           ...item,
           orderIndex: index
       }));
 
+      // Update UI immediately with re-indexed items
       setMoodBoardItems(reIndexedItems);
 
+      // Delete removed items from DB
       if (removedItems.length > 0) {
           const idsToDelete = removedItems.map(i => i.id);
           const { error } = await supabase
@@ -554,9 +559,16 @@ export default function Home() {
           
           if (error) {
               console.error("Failed to delete items:", error);
+          } else {
+              // Sync with userFolders state
+              setUserFolders(prev => prev.map(folder => ({
+                  ...folder,
+                  items: folder.items.filter(item => !idsToDelete.includes(item.id))
+              })));
           }
       }
       
+      // Update order indices in DB for all remaining items
       for (const item of reIndexedItems) {
           await supabase
             .from('mood_board_items')
@@ -571,9 +583,42 @@ export default function Home() {
   };
 
   const handleMoveToFolder = async (itemId: string, folderId: string) => {
+      // Update DB
       await supabase.from('mood_board_items').update({ folder_id: folderId }).eq('id', itemId);
+      
+      // Refresh Folders to show new state (since folder items are derived from separate fetch)
       if (userId) loadUserFolders(userId);
+      
+      // Optionally remove from main board if main board is "uncategorized" only?
+      // For now, we keep it on main board too.
       alert("Moved to folder!");
+  };
+
+  const handleFileUpload = async (file: File) => {
+      // Reuse handleSendMessage logic for upload
+      // But we don't want to add a text message, just upload and add to board.
+      // We can call handleSendMessage('', file) which does exactly that!
+      handleSendMessage('', file);
+  };
+
+  const handleUpdateDescription = async (description: string) => {
+      if (!editingMoodItem) return;
+
+      // Update local state
+      setEditingMoodItem({ ...editingMoodItem, description });
+      setMoodBoardItems(prev => prev.map(i =>
+          i.id === editingMoodItem.id ? { ...i, description } : i
+      ));
+
+      // Update database
+      await supabase.from('mood_board_items').update({ description }).eq('id', editingMoodItem.id);
+  };
+
+  const handleModifyImage = async (modificationPrompt: string) => {
+      if (!editingMoodItem) return;
+
+      alert(`AI modification feature coming soon! You requested: "${modificationPrompt}"`);
+      // TODO: Implement AI image modification
   };
 
   return (
@@ -620,12 +665,14 @@ export default function Home() {
                 />
             </div>
         ) : (
-            <MoodBoard 
-                items={moodBoardItems} 
+            <MoodBoard
+                items={moodBoardItems}
                 folders={userFolders}
-                onItemsChange={handleMoodBoardChange} 
+                onItemsChange={handleMoodBoardChange}
                 onUpdateName={handleUpdateName}
                 onMoveToFolder={handleMoveToFolder}
+                onFileUpload={handleFileUpload}
+                onEdit={setEditingMoodItem}
             />
         )}
         
@@ -636,6 +683,68 @@ export default function Home() {
         )}
 
       </div>
+
+      {/* Edit Modal */}
+      {editingMoodItem && (
+        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+            <div className="bg-white rounded-2xl max-w-2xl w-full overflow-hidden shadow-2xl flex flex-col md:flex-row max-h-[80vh]">
+                {/* Image Preview */}
+                <div className="w-full md:w-1/2 bg-gray-100 relative min-h-[300px]">
+                    <img src={editingMoodItem.imageUrl} className="w-full h-full object-contain absolute inset-0" />
+                </div>
+                
+                {/* Controls */}
+                <div className="w-full md:w-1/2 p-6 flex flex-col gap-6 overflow-y-auto">
+                    <div className="flex justify-between items-start">
+                        <h3 className="text-lg font-bold">Edit Image</h3>
+                        <button onClick={() => setEditingMoodItem(null)} className="p-1 hover:bg-gray-100 rounded-full"><LogOut size={20} /></button>
+                    </div>
+
+                    {/* Description Editor */}
+                    <div>
+                        <label className="block text-xs font-semibold text-gray-500 uppercase mb-2">Description</label>
+                        <textarea 
+                            className="w-full p-3 border border-gray-200 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 outline-none resize-none"
+                            rows={4}
+                            value={editingMoodItem.description || ''}
+                            onChange={(e) => handleUpdateDescription(e.target.value)}
+                            placeholder="Add a description..."
+                        />
+                        <div className="text-xs text-gray-400 mt-1 text-right">Saved automatically</div>
+                    </div>
+
+                    {/* AI Modification */}
+                    <div className="pt-6 border-t border-gray-100">
+                        <label className="block text-xs font-semibold text-blue-600 uppercase mb-2 flex items-center gap-2">
+                            Modify with AI <span className="bg-blue-100 text-blue-600 px-2 py-0.5 rounded-full text-[10px]">Beta</span>
+                        </label>
+                        <div className="flex gap-2">
+                            <input 
+                                type="text" 
+                                id="modifyInput"
+                                className="flex-1 p-3 border border-gray-200 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 outline-none"
+                                placeholder="e.g. Make it cyberpunk style"
+                                onKeyDown={(e) => {
+                                    if (e.key === 'Enter') {
+                                        handleModifyImage(e.currentTarget.value);
+                                    }
+                                }}
+                            />
+                            <button 
+                                onClick={() => {
+                                    const input = document.getElementById('modifyInput') as HTMLInputElement;
+                                    if (input.value) handleModifyImage(input.value);
+                                }}
+                                className="bg-blue-600 text-white px-4 py-2 rounded-lg text-sm font-medium hover:bg-blue-700 transition-colors"
+                            >
+                                Go
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+      )}
     </main>
   );
 }

@@ -3,19 +3,20 @@
 import React from 'react';
 import { useSortable } from '@dnd-kit/sortable';
 import { CSS } from '@dnd-kit/utilities';
-import { X } from 'lucide-react';
+import { X, Edit2 } from 'lucide-react';
 import { MoodBoardItem } from '@/types';
 
 interface Props {
   id: string;
   item: MoodBoardItem;
-  folders?: { id: string; name: string }[]; // New prop
+  folders?: { id: string; name: string }[];
   onRemove: (id: string) => void;
   onUpdateName?: (id: string, name: string) => void;
-  onMoveToFolder?: (id: string, folderId: string) => void; // New prop
+  onMoveToFolder?: (id: string, folderId: string) => void;
+  onEdit?: (item: MoodBoardItem) => void; // New prop
 }
 
-export function SortableMoodItem({ id, item, folders, onRemove, onUpdateName, onMoveToFolder }: Props) {
+export function SortableMoodItem({ id, item, folders, onRemove, onUpdateName, onMoveToFolder, onEdit }: Props) {
   const {
     attributes,
     listeners,
@@ -75,18 +76,30 @@ export function SortableMoodItem({ id, item, folders, onRemove, onUpdateName, on
         alt="Mood board item"
         className="w-full h-auto object-cover pointer-events-none"
       />
-      <button
-        onPointerDown={(e) => e.stopPropagation()} // specific for dnd-kit
-        onClick={(e) => {
-            e.stopPropagation();
-            e.preventDefault();
-            console.log('Deleting item:', item.id);
-            onRemove(item.id);
-        }}
-        className="absolute top-2 right-2 z-50 p-2 bg-black/50 text-white rounded-full opacity-0 group-hover:opacity-100 transition-opacity hover:bg-red-500 cursor-pointer"
-      >
-        <X size={16} />
-      </button>
+      <div className="absolute top-2 right-2 z-50 flex gap-2 opacity-0 group-hover:opacity-100 transition-opacity">
+        <button
+            onPointerDown={(e) => e.stopPropagation()}
+            onClick={(e) => {
+                e.stopPropagation();
+                e.preventDefault();
+                onEdit?.(item);
+            }}
+            className="p-2 bg-black/50 text-white rounded-full hover:bg-blue-500 cursor-pointer"
+        >
+            <Edit2 size={16} />
+        </button>
+        <button
+            onPointerDown={(e) => e.stopPropagation()} // Added stopPropagation for DND compatibility
+            onClick={(e) => {
+                e.stopPropagation();
+                e.preventDefault();
+                onRemove(item.id);
+            }}
+            className="p-2 bg-black/50 text-white rounded-full hover:bg-red-500 cursor-pointer"
+        >
+            <X size={16} />
+        </button>
+      </div>
     </div>
   );
 }

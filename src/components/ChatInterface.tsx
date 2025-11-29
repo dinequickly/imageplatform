@@ -246,6 +246,9 @@ export default function ChatInterface({ messages, moodBoardItems, folders, onSen
             <Send size={16} />
           </button>
         </div>
+        <div className="text-[10px] text-gray-400 mt-2 text-center">
+            Tip: Use <span className="font-mono bg-gray-100 px-1 rounded">@1</span> to reference Vision Board items
+        </div>
       </div>
     </div>
   );
