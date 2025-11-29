@@ -473,6 +473,14 @@ export default function Home() {
     const message = messages.find(m => m.id === msgId);
     const referenceImagesUrls = message?.proposal?.referenceImages;
 
+    console.log('handleProposalAccept called:', {
+        msgId,
+        prompt,
+        foundMessage: !!message,
+        referenceImagesCount: referenceImagesUrls?.length || 0,
+        referenceImages: referenceImagesUrls
+    });
+
     setMessages(prev => prev.map(m =>
         m.id === msgId && m.proposal
             ? { ...m, proposal: { ...m.proposal, status: 'accepted', prompt } }
@@ -491,9 +499,13 @@ export default function Home() {
         let referenceImages: string[] | undefined;
         if (referenceImagesUrls && referenceImagesUrls.length > 0) {
             const imagesToConvert = referenceImagesUrls.slice(0, 2); // Take up to 2 images
+            console.log('Converting reference images to base64:', imagesToConvert);
             referenceImages = await Promise.all(
                 imagesToConvert.map(url => imageToBase64(url))
             );
+            console.log('Converted to base64, sending to API:', referenceImages.length, 'images');
+        } else {
+            console.log('No reference images to convert');
         }
 
         const response = await fetch('/api/generate', {

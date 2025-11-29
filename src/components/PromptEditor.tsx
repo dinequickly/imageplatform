@@ -155,7 +155,7 @@ export default function PromptEditor({ originalProposal, onClose, onGenerate, se
                                         <p className="text-sm font-medium leading-relaxed">{msg.prompt}</p>
                                     </div>
                                     <button
-                                        onClick={() => onGenerate(msg.prompt!)}
+                                        onClick={() => onGenerate(currentPrompt)}
                                         className="w-full mt-2 px-4 py-2 bg-purple-600 text-white text-sm rounded-lg hover:bg-purple-700 transition-colors"
                                     >
                                         Generate Images
