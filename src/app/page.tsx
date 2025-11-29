@@ -375,38 +375,42 @@ export default function Home() {
         }
 
         setIsGenerating(true);
-        console.log("Sending to classifier:", classifierPrompt);
-        
-        // Use await delay instead of nested setTimeout to keep try/catch clean
-        await new Promise(resolve => setTimeout(resolve, 1500));
+        console.log("Sending to webhook for prompt engineering:", text);
 
-        const classificationResult = {
-            intent: 'generate_image',
-            subject: text,
-            style: 'high-end studio',
-            references: referencedItems.map(item => ({
-                id: item?.id,
-                imageUrl: item?.imageUrl,
-                description: item?.description,
-                name: item?.name
-            }))
-        };
+        try {
+            // Prepare image IDs for webhook
+            const imageIds = referencedItems.map(item => item?.id).filter(Boolean);
 
-        await supabase.from('classifier_logs').insert({
-            session_id: sessionId,
-            user_input: classifierPrompt,
-            classification_json: classificationResult
-        });
+            // Call webhook to generate engineered prompt
+            const webhookResponse = await fetch('https://maxipad.app.n8n.cloud/webhook/edit-image', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    userInput: text,
+                    imageIds: imageIds,
+                    userId: userId,
+                    sessionId: sessionId
+                })
+            });
 
-        let referenceContext = "";
-        if (classificationResult.references && classificationResult.references.length > 0) {
-             const descriptions = classificationResult.references.map(ref => ref.description || ref.name || 'a reference image').join(', ');
-             referenceContext = `, incorporating elements from: ${descriptions}.`;
-        }
+            const webhookData = await webhookResponse.json();
+            const engineeredPrompt = webhookData.engineeredPrompt || webhookData.prompt || `High-end photography of ${text}`;
 
-        const engineeredPrompt = `High-end photography of ${classificationResult.subject}, ${classificationResult.style} lighting, 4k resolution${referenceContext}`;
+            console.log('Engineered prompt from webhook:', engineeredPrompt);
 
-        setIsGenerating(false);
+            // Log classification for reference
+            await supabase.from('classifier_logs').insert({
+                session_id: sessionId,
+                user_input: text,
+                classification_json: {
+                    intent: 'generate_image',
+                    subject: text,
+                    imageIds: imageIds,
+                    engineeredPrompt: engineeredPrompt
+                }
+            });
+
+            setIsGenerating(false);
 
             const proposalMsg: ChatMessage = {
                 id: uuidv4(),
@@ -417,14 +421,40 @@ export default function Home() {
                     prompt: engineeredPrompt,
                     status: 'pending',
                     // Store the referenced images for generation
-                    referenceImages: classificationResult.references && classificationResult.references.length > 0 
-                        ? classificationResult.references.map(r => r.imageUrl) 
+                    referenceImages: referencedItems.length > 0
+                        ? referencedItems.map(r => r.imageUrl)
                         : undefined
                 }
             };
 
-        setMessages(prev => [...prev, proposalMsg]);
-        saveMessage(sessionId, proposalMsg);
+            setMessages(prev => [...prev, proposalMsg]);
+            saveMessage(sessionId, proposalMsg);
+
+        } catch (webhookError) {
+            console.error('Webhook failed, using fallback prompt:', webhookError);
+
+            // Fallback prompt generation if webhook fails
+            const fallbackPrompt = `High-end photography of ${text}, studio lighting, 4k resolution`;
+
+            setIsGenerating(false);
+
+            const proposalMsg: ChatMessage = {
+                id: uuidv4(),
+                role: 'assistant',
+                content: "Here is a prompt based on your request:",
+                type: 'proposal',
+                proposal: {
+                    prompt: fallbackPrompt,
+                    status: 'pending',
+                    referenceImages: referencedItems.length > 0
+                        ? referencedItems.map(r => r.imageUrl)
+                        : undefined
+                }
+            };
+
+            setMessages(prev => [...prev, proposalMsg]);
+            saveMessage(sessionId, proposalMsg);
+        }
         
     } catch (error) {
         console.error("Error in handleSendMessage:", error);
@@ -439,12 +469,11 @@ export default function Home() {
 
     // Find the message to get the reference images
     const message = messages.find(m => m.id === msgId);
-    const referenceImages = message?.proposal?.referenceImages;
-    const firstReferenceImage = referenceImages && referenceImages.length > 0 ? referenceImages[0] : undefined;
+    const referenceImagesUrls = message?.proposal?.referenceImages;
 
-    setMessages(prev => prev.map(m => 
-        m.id === msgId && m.proposal 
-            ? { ...m, proposal: { ...m.proposal, status: 'accepted', prompt } } 
+    setMessages(prev => prev.map(m =>
+        m.id === msgId && m.proposal
+            ? { ...m, proposal: { ...m.proposal, status: 'accepted', prompt } }
             : m
     ));
 
@@ -454,14 +483,23 @@ export default function Home() {
         .eq('id', msgId);
 
     setIsGenerating(true);
-    
+
     try {
+        // Convert up to 2 reference images to base64
+        let referenceImages: string[] | undefined;
+        if (referenceImagesUrls && referenceImagesUrls.length > 0) {
+            const imagesToConvert = referenceImagesUrls.slice(0, 2); // Take up to 2 images
+            referenceImages = await Promise.all(
+                imagesToConvert.map(url => imageToBase64(url))
+            );
+        }
+
         const response = await fetch('/api/generate', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify({ 
+            body: JSON.stringify({
                 prompt,
-                referenceImage: firstReferenceImage // Pass the first reference image URL if it exists
+                referenceImages // Pass up to 2 reference images as base64
             })
         });
         const data = await response.json();
@@ -614,11 +652,85 @@ export default function Home() {
       await supabase.from('mood_board_items').update({ description }).eq('id', editingMoodItem.id);
   };
 
-  const handleModifyImage = async (modificationPrompt: string) => {
-      if (!editingMoodItem) return;
+  const imageToBase64 = async (imageUrl: string): Promise<string> => {
+      // Fetch the image
+      const response = await fetch(imageUrl);
+      const blob = await response.blob();
 
-      alert(`AI modification feature coming soon! You requested: "${modificationPrompt}"`);
-      // TODO: Implement AI image modification
+      // Convert to base64
+      return new Promise((resolve, reject) => {
+          const reader = new FileReader();
+          reader.onloadend = () => resolve(reader.result as string);
+          reader.onerror = reject;
+          reader.readAsDataURL(blob);
+      });
+  };
+
+  const handleModifyImage = async (modificationPrompt: string) => {
+      if (!editingMoodItem || !sessionId) return;
+
+      try {
+          setIsGenerating(true);
+
+          // 1. Convert image to base64
+          const imageBase64 = await imageToBase64(editingMoodItem.imageUrl);
+
+          // 2. Call the edit API
+          const response = await fetch('/api/edit-image', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({
+                  imageBase64,
+                  modificationPrompt
+              })
+          });
+
+          if (!response.ok) {
+              throw new Error('Failed to modify image');
+          }
+
+          const data = await response.json();
+
+          if (data.modifiedImage) {
+              // 3. Upload the modified image to Supabase
+              const base64Data = data.modifiedImage.split(',')[1];
+              const blob = await fetch(data.modifiedImage).then(r => r.blob());
+              const fileName = `${uuidv4()}.jpg`;
+              const filePath = `${sessionId}/${fileName}`;
+
+              const { error: uploadError } = await supabase.storage
+                  .from('uploads')
+                  .upload(filePath, blob);
+
+              if (uploadError) {
+                  console.error('Upload error:', uploadError);
+                  throw new Error('Failed to upload modified image');
+              }
+
+              const { data: { publicUrl } } = supabase.storage
+                  .from('uploads')
+                  .getPublicUrl(filePath);
+
+              // 4. Update mood board item with new image
+              const updatedItem = { ...editingMoodItem, imageUrl: publicUrl };
+              setEditingMoodItem(updatedItem);
+              setMoodBoardItems(prev => prev.map(i =>
+                  i.id === editingMoodItem.id ? updatedItem : i
+              ));
+
+              // 5. Update database
+              await supabase.from('mood_board_items')
+                  .update({ image_url: publicUrl })
+                  .eq('id', editingMoodItem.id);
+
+              alert('Image modified successfully!');
+          }
+      } catch (error) {
+          console.error('Image modification error:', error);
+          alert('Failed to modify image. Please try again.');
+      } finally {
+          setIsGenerating(false);
+      }
   };
 
   return (
@@ -691,24 +803,39 @@ export default function Home() {
                 {/* Image Preview */}
                 <div className="w-full md:w-1/2 bg-gray-100 relative min-h-[300px]">
                     <img src={editingMoodItem.imageUrl} className="w-full h-full object-contain absolute inset-0" />
+                    {isGenerating && (
+                        <div className="absolute inset-0 bg-black/50 flex items-center justify-center">
+                            <div className="bg-white rounded-lg p-4 flex flex-col items-center gap-2">
+                                <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600"></div>
+                                <p className="text-sm font-medium text-gray-700">Modifying image...</p>
+                            </div>
+                        </div>
+                    )}
                 </div>
-                
+
                 {/* Controls */}
                 <div className="w-full md:w-1/2 p-6 flex flex-col gap-6 overflow-y-auto">
                     <div className="flex justify-between items-start">
                         <h3 className="text-lg font-bold">Edit Image</h3>
-                        <button onClick={() => setEditingMoodItem(null)} className="p-1 hover:bg-gray-100 rounded-full"><LogOut size={20} /></button>
+                        <button
+                            onClick={() => setEditingMoodItem(null)}
+                            disabled={isGenerating}
+                            className="p-1 hover:bg-gray-100 rounded-full disabled:opacity-50 disabled:cursor-not-allowed"
+                        >
+                            <LogOut size={20} />
+                        </button>
                     </div>
 
                     {/* Description Editor */}
                     <div>
                         <label className="block text-xs font-semibold text-gray-500 uppercase mb-2">Description</label>
-                        <textarea 
-                            className="w-full p-3 border border-gray-200 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 outline-none resize-none"
+                        <textarea
+                            className="w-full p-3 border border-gray-200 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 outline-none resize-none disabled:opacity-50"
                             rows={4}
                             value={editingMoodItem.description || ''}
                             onChange={(e) => handleUpdateDescription(e.target.value)}
                             placeholder="Add a description..."
+                            disabled={isGenerating}
                         />
                         <div className="text-xs text-gray-400 mt-1 text-right">Saved automatically</div>
                     </div>
@@ -719,25 +846,31 @@ export default function Home() {
                             Modify with AI <span className="bg-blue-100 text-blue-600 px-2 py-0.5 rounded-full text-[10px]">Beta</span>
                         </label>
                         <div className="flex gap-2">
-                            <input 
-                                type="text" 
+                            <input
+                                type="text"
                                 id="modifyInput"
-                                className="flex-1 p-3 border border-gray-200 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 outline-none"
+                                className="flex-1 p-3 border border-gray-200 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 outline-none disabled:opacity-50"
                                 placeholder="e.g. Make it cyberpunk style"
+                                disabled={isGenerating}
                                 onKeyDown={(e) => {
-                                    if (e.key === 'Enter') {
+                                    if (e.key === 'Enter' && !isGenerating) {
                                         handleModifyImage(e.currentTarget.value);
+                                        e.currentTarget.value = '';
                                     }
                                 }}
                             />
-                            <button 
+                            <button
                                 onClick={() => {
                                     const input = document.getElementById('modifyInput') as HTMLInputElement;
-                                    if (input.value) handleModifyImage(input.value);
+                                    if (input.value) {
+                                        handleModifyImage(input.value);
+                                        input.value = '';
+                                    }
                                 }}
-                                className="bg-blue-600 text-white px-4 py-2 rounded-lg text-sm font-medium hover:bg-blue-700 transition-colors"
+                                disabled={isGenerating}
+                                className="bg-blue-600 text-white px-4 py-2 rounded-lg text-sm font-medium hover:bg-blue-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
                             >
-                                Go
+                                {isGenerating ? 'Processing...' : 'Go'}
                             </button>
                         </div>
                     </div>
