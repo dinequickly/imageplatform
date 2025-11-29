@@ -8,13 +8,14 @@ import { cn } from '@/lib/utils';
 interface Props {
   messages: ChatMessage[];
   moodBoardItems: MoodBoardItem[];
-  folders: FolderWithItems[]; 
+  folders: FolderWithItems[];
   onSendMessage: (text: string, file?: File) => void;
   onProposalAccept: (id: string, prompt: string) => void;
+  onProposalEdit?: (message: ChatMessage) => void;
   isGenerating: boolean;
 }
 
-export default function ChatInterface({ messages, moodBoardItems, folders, onSendMessage, onProposalAccept, isGenerating }: Props) {
+export default function ChatInterface({ messages, moodBoardItems, folders, onSendMessage, onProposalAccept, onProposalEdit, isGenerating }: Props) {
   const [inputValue, setInputValue] = useState('');
   const [activePreviews, setActivePreviews] = useState<Array<{
       type: 'single' | 'folder';
@@ -151,9 +152,10 @@ export default function ChatInterface({ messages, moodBoardItems, folders, onSen
                     {msg.content && <p>{msg.content}</p>}
                 </div>
               ) : (
-                <ProposalBlock 
-                    message={msg} 
-                    onAccept={(prompt) => onProposalAccept(msg.id, prompt)} 
+                <ProposalBlock
+                    message={msg}
+                    onAccept={(prompt) => onProposalAccept(msg.id, prompt)}
+                    onEdit={onProposalEdit ? () => onProposalEdit(msg) : undefined}
                 />
               )}
             </div>
@@ -254,7 +256,7 @@ export default function ChatInterface({ messages, moodBoardItems, folders, onSen
   );
 }
 
-function ProposalBlock({ message, onAccept }: { message: ChatMessage; onAccept: (p: string) => void }) {
+function ProposalBlock({ message, onAccept, onEdit }: { message: ChatMessage; onAccept: (p: string) => void; onEdit?: () => void }) {
     const [prompt, setPrompt] = useState(message.proposal?.prompt || '');
     const [isEditing, setIsEditing] = useState(false);
     const isAccepted = message.proposal?.status === 'accepted';
@@ -305,24 +307,34 @@ function ProposalBlock({ message, onAccept }: { message: ChatMessage; onAccept: 
                     />
                     
                     <div className="flex justify-between items-center pt-2 border-t border-gray-100">
-                         {!isEditing ? (
-                             <button 
-                                onClick={() => setIsEditing(true)}
-                                className="text-xs text-gray-500 hover:text-blue-600 flex items-center gap-1"
-                             >
-                                <Edit3 size={12} /> Edit
-                             </button>
-                         ) : (
-                             <button 
-                                onClick={() => setIsEditing(false)}
-                                className="text-xs text-blue-600 font-medium flex items-center gap-1"
-                             >
-                                <Check size={12} /> Done
-                             </button>
-                         )}
+                         <div className="flex gap-2">
+                             {!isEditing ? (
+                                 <button
+                                    onClick={() => setIsEditing(true)}
+                                    className="text-xs text-gray-500 hover:text-blue-600 flex items-center gap-1"
+                                 >
+                                    <Edit3 size={12} /> Edit
+                                 </button>
+                             ) : (
+                                 <button
+                                    onClick={() => setIsEditing(false)}
+                                    className="text-xs text-blue-600 font-medium flex items-center gap-1"
+                                 >
+                                    <Check size={12} /> Done
+                                 </button>
+                             )}
+                             {onEdit && !isAccepted && (
+                                 <button
+                                    onClick={onEdit}
+                                    className="text-xs text-purple-600 hover:text-purple-700 flex items-center gap-1 font-medium"
+                                 >
+                                    <Sparkles size={12} /> Edit with AI
+                                 </button>
+                             )}
+                         </div>
 
                          <div className="flex gap-2">
-                            <button 
+                            <button
                                 onClick={() => onAccept(prompt)}
                                 className="px-3 py-1 bg-black text-white text-xs rounded-full hover:bg-gray-800 transition-colors"
                             >

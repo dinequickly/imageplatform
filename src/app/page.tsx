@@ -8,6 +8,7 @@ import MoodBoard from '@/components/MoodBoard';
 import ChatInterface from '@/components/ChatInterface';
 import ComparisonView from '@/components/ComparisonView';
 import OnboardingModal from '@/components/OnboardingModal';
+import PromptEditor from '@/components/PromptEditor';
 import { MoodBoardItem, ChatMessage, Generation, Profile, FolderWithItems } from '@/types';
 import { generateMoodBoard } from '@/lib/imagen'; // Keep mock for initial moodboard for now
 import { createClient } from '@/lib/supabase/client';
@@ -21,7 +22,8 @@ export default function Home() {
   const [sessionId, setSessionId] = useState<string | null>(null);
   const [userId, setUserId] = useState<string | null>(null);
   const [showOnboarding, setShowOnboarding] = useState(false);
-  const [editingMoodItem, setEditingMoodItem] = useState<MoodBoardItem | null>(null); // New state
+  const [editingMoodItem, setEditingMoodItem] = useState<MoodBoardItem | null>(null);
+  const [editingProposal, setEditingProposal] = useState<ChatMessage | null>(null); // New state for proposal editing
 
   const router = useRouter();
   const supabase = createClient();
@@ -739,61 +741,76 @@ export default function Home() {
       
       {/* Left: Chat Interface */}
       <div className="w-2/5 min-w-[400px] max-w-[600px] h-full p-4 flex flex-col relative">
-        <ChatInterface 
-            messages={messages} 
+        <ChatInterface
+            messages={messages}
             moodBoardItems={moodBoardItems}
-            folders={userFolders} 
-            onSendMessage={handleSendMessage} 
+            folders={userFolders}
+            onSendMessage={handleSendMessage}
             onProposalAccept={handleProposalAccept}
+            onProposalEdit={setEditingProposal}
             isGenerating={isGenerating}
         />
       </div>
 
       {/* Right: Visual Workspace */}
-      <div className="flex-1 h-full overflow-y-auto p-6 flex flex-col gap-8">
-        {/* Header */}
-        <div className="flex justify-between items-center">
-            <h1 className="text-2xl font-bold tracking-tight">Pressed. <span className="text-gray-400 font-normal">Creative Director</span></h1>
-            <div className="flex items-center gap-4">
-                <button 
-                    onClick={() => router.push('/folders')} 
-                    className="px-4 py-2 bg-black text-white font-medium text-sm rounded-full hover:bg-gray-800 transition-all hover:shadow-lg flex items-center gap-2"
-                >
-                   <span>Folders</span>
-                </button>
-                <div className="text-sm text-gray-500">Session: {sessionId?.slice(0,8)}</div>
-                <button onClick={handleSignOut} className="p-2 hover:bg-gray-200 rounded-full transition-colors text-gray-600">
-                    <LogOut size={18} />
-                </button>
-            </div>
-        </div>
-
-        {/* Comparison View (Active) */}
-        {currentGeneration ? (
-            <div className="animate-in fade-in slide-in-from-bottom-4 duration-500">
-                <ComparisonView 
-                    generation={currentGeneration} 
-                    onComplete={handleComparisonComplete} 
-                />
-            </div>
+      <div className="flex-1 h-full overflow-y-auto flex flex-col">
+        {editingProposal ? (
+          <PromptEditor
+            originalProposal={editingProposal}
+            onClose={() => setEditingProposal(null)}
+            onGenerate={(prompt) => {
+              setEditingProposal(null);
+              handleProposalAccept(editingProposal.id, prompt);
+            }}
+            sessionId={sessionId || ''}
+            userId={userId || ''}
+          />
         ) : (
-            <MoodBoard
-                items={moodBoardItems}
-                folders={userFolders}
-                onItemsChange={handleMoodBoardChange}
-                onUpdateName={handleUpdateName}
-                onMoveToFolder={handleMoveToFolder}
-                onFileUpload={handleFileUpload}
-                onEdit={setEditingMoodItem}
-            />
-        )}
-        
-        {currentGeneration && (
-             <div className="opacity-50 pointer-events-none grayscale">
-                <MoodBoard items={moodBoardItems} onItemsChange={() => {}} />
-             </div>
-        )}
+          <div className="p-6 flex flex-col gap-8">
+            {/* Header */}
+            <div className="flex justify-between items-center">
+                <h1 className="text-2xl font-bold tracking-tight">Pressed. <span className="text-gray-400 font-normal">Creative Director</span></h1>
+                <div className="flex items-center gap-4">
+                    <button
+                        onClick={() => router.push('/folders')}
+                        className="px-4 py-2 bg-black text-white font-medium text-sm rounded-full hover:bg-gray-800 transition-all hover:shadow-lg flex items-center gap-2"
+                    >
+                       <span>Folders</span>
+                    </button>
+                    <div className="text-sm text-gray-500">Session: {sessionId?.slice(0,8)}</div>
+                    <button onClick={handleSignOut} className="p-2 hover:bg-gray-200 rounded-full transition-colors text-gray-600">
+                        <LogOut size={18} />
+                    </button>
+                </div>
+            </div>
 
+            {/* Comparison View (Active) */}
+            {currentGeneration ? (
+                <div className="animate-in fade-in slide-in-from-bottom-4 duration-500">
+                    <ComparisonView
+                        generation={currentGeneration}
+                        onComplete={handleComparisonComplete}
+                    />
+                </div>
+            ) : (
+                <MoodBoard
+                    items={moodBoardItems}
+                    folders={userFolders}
+                    onItemsChange={handleMoodBoardChange}
+                    onUpdateName={handleUpdateName}
+                    onMoveToFolder={handleMoveToFolder}
+                    onFileUpload={handleFileUpload}
+                    onEdit={setEditingMoodItem}
+                />
+            )}
+
+            {currentGeneration && (
+                 <div className="opacity-50 pointer-events-none grayscale">
+                    <MoodBoard items={moodBoardItems} onItemsChange={() => {}} />
+                 </div>
+            )}
+          </div>
+        )}
       </div>
 
       {/* Edit Modal */}
