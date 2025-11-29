@@ -543,26 +543,46 @@ export default function Home() {
   };
 
   const handleComparisonComplete = async (selected: 'A' | 'B', explanation: string) => {
-    if (!currentGeneration || !sessionId) return;
+    if (!currentGeneration || !sessionId || !userId) return;
 
     const winnerUrl = selected === 'A' ? currentGeneration.imageA : currentGeneration.imageB;
+
+    // Find or create "Generated" folder
+    let generatedFolder = userFolders.find(f => f.name.toLowerCase() === 'generated');
+
+    if (!generatedFolder) {
+      // Create the Generated folder
+      const { data: newFolder, error: folderError } = await supabase
+        .from('folders')
+        .insert({ name: 'Generated', user_id: userId })
+        .select()
+        .single();
+
+      if (newFolder && !folderError) {
+        generatedFolder = { id: newFolder.id, name: 'Generated', items: [] };
+        setUserFolders(prev => [...prev, generatedFolder!]);
+      }
+    }
+
     const newItem: MoodBoardItem = {
         id: uuidv4(),
         imageUrl: winnerUrl,
         description: currentGeneration.prompt,
         isCurated: true,
         orderIndex: moodBoardItems.length
-    }; 
-    
+    };
+
     setMoodBoardItems(prev => [...prev, newItem]);
 
+    // Save to mood_board_items with folder_id
     await supabase.from('mood_board_items').insert({
         id: newItem.id,
         session_id: sessionId,
         image_url: newItem.imageUrl,
         description: newItem.description,
-        order_index: moodBoardItems.length, 
-        added_by: userId
+        order_index: moodBoardItems.length,
+        added_by: userId,
+        folder_id: generatedFolder?.id // Save to Generated folder
     });
 
     await supabase.from('generations').update({
@@ -575,11 +595,14 @@ export default function Home() {
     const confirmMsg: ChatMessage = {
         id: uuidv4(),
         role: 'assistant',
-        content: `Great choice. I've added it to the board.`,
+        content: `Great choice. I've added it to the board and your Generated folder.`,
         type: 'text'
     };
     setMessages(prev => [...prev, confirmMsg]);
     saveMessage(sessionId, confirmMsg);
+
+    // Refresh folders to show new item count
+    if (userId) loadUserFolders(userId);
   };
 
   const handleSignOut = async () => {
@@ -635,14 +658,28 @@ export default function Home() {
   };
 
   const handleMoveToFolder = async (itemId: string, folderId: string) => {
+      console.log('Moving item to folder:', { itemId, folderId });
+
       // Update DB
-      await supabase.from('mood_board_items').update({ folder_id: folderId }).eq('id', itemId);
-      
-      // Refresh Folders to show new state (since folder items are derived from separate fetch)
-      if (userId) loadUserFolders(userId);
-      
-      // Optionally remove from main board if main board is "uncategorized" only?
-      // For now, we keep it on main board too.
+      const { data, error } = await supabase
+        .from('mood_board_items')
+        .update({ folder_id: folderId })
+        .eq('id', itemId)
+        .select();
+
+      if (error) {
+          console.error('Error moving to folder:', error);
+          alert('Failed to move to folder. Check console.');
+          return;
+      }
+
+      console.log('Successfully moved to folder:', data);
+
+      // Refresh Folders to show new state
+      if (userId) {
+          await loadUserFolders(userId);
+      }
+
       alert("Moved to folder!");
   };
 
