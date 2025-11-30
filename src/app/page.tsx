@@ -8,7 +8,6 @@ import MoodBoard from '@/components/MoodBoard';
 import ChatInterface from '@/components/ChatInterface';
 import ComparisonView from '@/components/ComparisonView';
 import OnboardingModal from '@/components/OnboardingModal';
-import PromptEditor from '@/components/PromptEditor';
 import { MoodBoardItem, ChatMessage, Generation, Profile, FolderWithItems } from '@/types';
 import { generateMoodBoard } from '@/lib/imagen'; // Keep mock for initial moodboard for now
 import { createClient } from '@/lib/supabase/client';
@@ -23,7 +22,6 @@ export default function Home() {
   const [userId, setUserId] = useState<string | null>(null);
   const [showOnboarding, setShowOnboarding] = useState(false);
   const [editingMoodItem, setEditingMoodItem] = useState<MoodBoardItem | null>(null);
-  const [editingProposal, setEditingProposal] = useState<ChatMessage | null>(null); // New state for proposal editing
 
   const router = useRouter();
   const supabase = createClient();
@@ -585,6 +583,17 @@ export default function Home() {
         folder_id: generatedFolder?.id // Save to Generated folder
     });
 
+    // Also save to folder_items so it appears in the folder view
+    if (generatedFolder?.id) {
+        await supabase.from('folder_items').insert({
+            folder_id: generatedFolder.id,
+            image_url: newItem.imageUrl,
+            title: `Generated: ${currentGeneration.prompt.substring(0, 50)}${currentGeneration.prompt.length > 50 ? '...' : ''}`,
+            description: currentGeneration.prompt,
+            added_by: userId
+        });
+    }
+
     await supabase.from('generations').update({
         selected_image_url: winnerUrl,
         user_explanation: explanation
@@ -796,26 +805,13 @@ export default function Home() {
             folders={userFolders}
             onSendMessage={handleSendMessage}
             onProposalAccept={handleProposalAccept}
-            onProposalEdit={setEditingProposal}
             isGenerating={isGenerating}
         />
       </div>
 
       {/* Right: Visual Workspace */}
       <div className="flex-1 h-full overflow-y-auto flex flex-col">
-        {editingProposal ? (
-          <PromptEditor
-            originalProposal={editingProposal}
-            onClose={() => setEditingProposal(null)}
-            onGenerate={(prompt) => {
-              setEditingProposal(null);
-              handleProposalAccept(editingProposal.id, prompt);
-            }}
-            sessionId={sessionId || ''}
-            userId={userId || ''}
-          />
-        ) : (
-          <div className="p-6 flex flex-col gap-8">
+        <div className="p-6 flex flex-col gap-8">
             {/* Header */}
             <div className="flex justify-between items-center">
                 <h1 className="text-2xl font-bold tracking-tight">Pressed. <span className="text-gray-400 font-normal">Creative Director</span></h1>
@@ -859,7 +855,6 @@ export default function Home() {
                  </div>
             )}
           </div>
-        )}
       </div>
 
       {/* Edit Modal */}

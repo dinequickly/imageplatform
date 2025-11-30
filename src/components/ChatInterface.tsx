@@ -11,11 +11,10 @@ interface Props {
   folders: FolderWithItems[];
   onSendMessage: (text: string, file?: File) => void;
   onProposalAccept: (id: string, prompt: string) => void;
-  onProposalEdit?: (message: ChatMessage) => void;
   isGenerating: boolean;
 }
 
-export default function ChatInterface({ messages, moodBoardItems, folders, onSendMessage, onProposalAccept, onProposalEdit, isGenerating }: Props) {
+export default function ChatInterface({ messages, moodBoardItems, folders, onSendMessage, onProposalAccept, isGenerating }: Props) {
   const [inputValue, setInputValue] = useState('');
   const [activePreviews, setActivePreviews] = useState<Array<{
       type: 'single' | 'folder';
@@ -155,7 +154,6 @@ export default function ChatInterface({ messages, moodBoardItems, folders, onSen
                 <ProposalBlock
                     message={msg}
                     onAccept={(prompt) => onProposalAccept(msg.id, prompt)}
-                    onEdit={onProposalEdit ? () => onProposalEdit(msg) : undefined}
                 />
               )}
             </div>
@@ -256,7 +254,7 @@ export default function ChatInterface({ messages, moodBoardItems, folders, onSen
   );
 }
 
-function ProposalBlock({ message, onAccept, onEdit }: { message: ChatMessage; onAccept: (p: string) => void; onEdit?: () => void }) {
+function ProposalBlock({ message, onAccept }: { message: ChatMessage; onAccept: (p: string) => void }) {
     const [prompt, setPrompt] = useState(message.proposal?.prompt || '');
     const [isEditing, setIsEditing] = useState(false);
     const isAccepted = message.proposal?.status === 'accepted';
@@ -321,14 +319,6 @@ function ProposalBlock({ message, onAccept, onEdit }: { message: ChatMessage; on
                                     className="text-xs text-blue-600 font-medium flex items-center gap-1"
                                  >
                                     <Check size={12} /> Done
-                                 </button>
-                             )}
-                             {onEdit && !isAccepted && (
-                                 <button
-                                    onClick={onEdit}
-                                    className="text-xs text-purple-600 hover:text-purple-700 flex items-center gap-1 font-medium"
-                                 >
-                                    <Sparkles size={12} /> Edit with AI
                                  </button>
                              )}
                          </div>
