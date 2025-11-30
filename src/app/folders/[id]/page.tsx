@@ -113,18 +113,21 @@ export default function FolderDetailPage() {
 
         if (dbError) throw dbError;
 
-        // 3. Send to n8n Webhook
+        // 3. Send to image webhook
         await fetch('https://maxipad.app.n8n.cloud/webhook/7650610d-5a8d-41fe-b111-5f6bfa21d436', {
             method: 'POST',
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
-                type: 'folder', // Explicitly requested
+                imageUrl: publicUrl,
+                userId: user.id,
+                sessionId: null, // No session context for folder uploads
+                fileName: uploadFile.name,
+                context: 'folder_upload',
                 folderId: id,
                 folderName: folder?.name,
-                imageUrl: publicUrl,
+                folderItemId: newItem.id,
                 title: uploadTitle,
                 description: uploadDesc,
-                userId: user.id,
                 timestamp: new Date().toISOString()
             })
         });

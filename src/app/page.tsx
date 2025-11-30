@@ -3,11 +3,12 @@
 import React, { useState, useEffect } from 'react';
 import { v4 as uuidv4 } from 'uuid';
 import { useRouter } from 'next/navigation';
-import { LogOut } from 'lucide-react';
+import { LogOut, Sparkles } from 'lucide-react';
 import MoodBoard from '@/components/MoodBoard';
 import ChatInterface from '@/components/ChatInterface';
 import ComparisonView from '@/components/ComparisonView';
 import OnboardingModal from '@/components/OnboardingModal';
+import ImageEditor from '@/components/ImageEditor';
 import { MoodBoardItem, ChatMessage, Generation, Profile, FolderWithItems } from '@/types';
 import { generateMoodBoard } from '@/lib/imagen'; // Keep mock for initial moodboard for now
 import { createClient } from '@/lib/supabase/client';
@@ -22,6 +23,7 @@ export default function Home() {
   const [userId, setUserId] = useState<string | null>(null);
   const [showOnboarding, setShowOnboarding] = useState(false);
   const [editingMoodItem, setEditingMoodItem] = useState<MoodBoardItem | null>(null);
+  const [showStudio, setShowStudio] = useState(false);
 
   const router = useRouter();
   const supabase = createClient();
@@ -201,7 +203,8 @@ export default function Home() {
 
     try {
         let imageUrl = '';
-        
+        let uploadedItemId = '';
+
         if (file) {
             const fileExt = file.name.split('.').pop();
             const fileName = `${uuidv4()}.${fileExt}`;
@@ -219,7 +222,7 @@ export default function Home() {
             const { data: { publicUrl } } = supabase.storage
                 .from('uploads')
                 .getPublicUrl(filePath);
-            
+
             imageUrl = publicUrl;
             console.log('Image Uploaded:', imageUrl);
 
@@ -232,6 +235,7 @@ export default function Home() {
                 isCurated: true,
                 orderIndex: moodBoardItems.length
             };
+            uploadedItemId = newItem.id;
             setMoodBoardItems(prev => [...prev, newItem]);
             await supabase.from('mood_board_items').insert({
                 id: newItem.id,
@@ -245,10 +249,10 @@ export default function Home() {
         }
 
         // Add User Message
-        const userMsgToSave: ChatMessage = { 
-            id: uuidv4(), 
-            role: 'user', 
-            content: text, 
+        const userMsgToSave: ChatMessage = {
+            id: uuidv4(),
+            role: 'user',
+            content: text,
             type: imageUrl ? 'image' : 'text',
             imageUrl: imageUrl || undefined
         };
@@ -266,6 +270,8 @@ export default function Home() {
                         userId: userId,
                         sessionId: sessionId,
                         fileName: file.name,
+                        context: 'vibe_board_upload',
+                        moodBoardItemId: uploadedItemId,
                         timestamp: new Date().toISOString()
                     })
                 });
@@ -304,38 +310,114 @@ export default function Home() {
             return; 
         }
 
-        // Standard Text Flow
+        // Standard Text Flow - Extract referenced items with type distinction
         const mentionRegex = /@([a-zA-Z0-9_\/]+)/g;
         const matches = [...text.matchAll(mentionRegex)];
-        
-        const referencedItems: MoodBoardItem[] = [];
-        
+
+        interface ReferencedItem {
+            mention: string;
+            type: 'mood_board_item' | 'folder_item';
+            id: string;
+            imageUrl: string;
+            description?: string;
+            name?: string;
+            folderId?: string;
+            folderName?: string;
+        }
+
+        const referencedItems: ReferencedItem[] = [];
+        const legacyReferencedItems: MoodBoardItem[] = []; // For backward compatibility with image generation
+
         for (const match of matches) {
             const rawRef = match[1];
+
+            // @1, @2, etc (mood board by index)
             if (/^\d+$/.test(rawRef)) {
                 const idx = parseInt(rawRef) - 1;
                 const item = moodBoardItems.find(i => i.orderIndex === idx);
-                if (item) referencedItems.push(item);
+                if (item) {
+                    referencedItems.push({
+                        mention: `@${rawRef}`,
+                        type: 'mood_board_item',
+                        id: item.id,
+                        imageUrl: item.imageUrl,
+                        description: item.description,
+                        name: item.name
+                    });
+                    legacyReferencedItems.push(item);
+                }
                 continue;
             }
+
+            // @hero-shot, etc (mood board by name)
             const namedItem = moodBoardItems.find(i => i.name?.toLowerCase() === rawRef.toLowerCase());
             if (namedItem) {
-                referencedItems.push(namedItem);
+                referencedItems.push({
+                    mention: `@${rawRef}`,
+                    type: 'mood_board_item',
+                    id: namedItem.id,
+                    imageUrl: namedItem.imageUrl,
+                    description: namedItem.description,
+                    name: namedItem.name
+                });
+                legacyReferencedItems.push(namedItem);
                 continue;
             }
+
+            // @Folder/1, @Generated/2, etc (folder items by index)
             if (rawRef.includes('/')) {
                  const [folderName, idxStr] = rawRef.split('/');
                  const folder = userFolders.find(f => f.name.toLowerCase() === folderName.toLowerCase());
                  if (folder && /^\d+$/.test(idxStr)) {
                      const idx = parseInt(idxStr) - 1;
                      const item = folder.items[idx];
-                     if (item) referencedItems.push(item);
+                     if (item) {
+                         referencedItems.push({
+                             mention: `@${rawRef}`,
+                             type: 'folder_item',
+                             id: item.id,
+                             imageUrl: item.imageUrl,
+                             description: item.description,
+                             name: item.name, // MoodBoardItem has 'name', not 'title'
+                             folderId: folder.id,
+                             folderName: folder.name
+                         });
+                         legacyReferencedItems.push({
+                             id: item.id,
+                             imageUrl: item.imageUrl,
+                             description: item.description,
+                             name: item.name,
+                             isCurated: true,
+                             orderIndex: idx
+                         });
+                     }
                  }
                  continue;
             }
+
+            // @FolderName (entire folder)
             const folder = userFolders.find(f => f.name.toLowerCase() === rawRef.toLowerCase());
             if (folder) {
-                referencedItems.push(...folder.items.slice(0, 5));
+                folder.items.slice(0, 5).forEach((item, idx) => {
+                    referencedItems.push({
+                        mention: `@${rawRef}`,
+                        type: 'folder_item',
+                        id: item.id,
+                        imageUrl: item.imageUrl,
+                        description: item.description,
+                        name: item.name, // MoodBoardItem has 'name', not 'title'
+                        folderId: folder.id,
+                        folderName: folder.name
+                    });
+                    legacyReferencedItems.push({
+                        id: item.id,
+                        imageUrl: item.imageUrl,
+                        description: item.description,
+                        name: item.name,
+                        isCurated: true,
+                        orderIndex: idx
+                    });
+                });
             }
         }
 
@@ -375,60 +457,94 @@ export default function Home() {
         }
 
         setIsGenerating(true);
-        console.log("Sending to webhook for prompt engineering:", text);
+        console.log("Sending to chat webhook:", text);
 
         try {
-            // Prepare image IDs for webhook
-            const imageIds = referencedItems.map(item => item?.id).filter(Boolean);
+            // Get conversation history (last 10 messages)
+            const conversationHistory = messages.slice(-10).map(m => ({
+                role: m.role,
+                content: m.content,
+                type: m.type
+            }));
 
-            // Call webhook to generate engineered prompt
-            const webhookResponse = await fetch('https://maxipad.app.n8n.cloud/webhook/edit-image', {
+            // Call new chat webhook
+            const webhookResponse = await fetch('https://maxipad.app.n8n.cloud/webhook/516eae5d-df11-4785-856e-d74a52e1552c', {
                 method: 'POST',
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({
-                    userInput: text,
-                    imageIds: imageIds,
-                    userId: userId,
-                    sessionId: sessionId
+                    sessionId: sessionId,
+                    userMessage: text,
+                    references: referencedItems.map(item => ({
+                        mention: item.mention,
+                        id: item.id,
+                        type: item.type
+                    }))
                 })
             });
 
-            const webhookData = await webhookResponse.json();
-            const engineeredPrompt = webhookData.engineeredPrompt || webhookData.prompt || `High-end photography of ${text}`;
+            // Try to parse JSON, handle errors gracefully
+            let webhookData;
+            try {
+                const responseText = await webhookResponse.text();
+                console.log('Raw webhook response:', responseText);
 
-            console.log('Engineered prompt from webhook:', engineeredPrompt);
+                if (!responseText || responseText.trim() === '') {
+                    throw new Error('Empty response from webhook');
+                }
+
+                webhookData = JSON.parse(responseText);
+                console.log('Chat webhook response:', webhookData);
+            } catch (parseError) {
+                console.error('Failed to parse webhook response:', parseError);
+                throw new Error('Webhook returned invalid JSON');
+            }
 
             // Log classification for reference
             await supabase.from('classifier_logs').insert({
                 session_id: sessionId,
                 user_input: text,
                 classification_json: {
-                    intent: 'generate_image',
-                    subject: text,
-                    imageIds: imageIds,
-                    engineeredPrompt: engineeredPrompt
+                    messageType: 'user_message',
+                    referencedItemsCount: referencedItems.length,
+                    webhookResponse: webhookData
                 }
             });
 
             setIsGenerating(false);
 
-            const proposalMsg: ChatMessage = {
-                id: uuidv4(),
-                role: 'assistant',
-                content: "Here is a prompt based on your request:",
-                type: 'proposal',
-                proposal: {
-                    prompt: engineeredPrompt,
-                    status: 'pending',
-                    // Store the referenced images for generation
-                    referenceImages: referencedItems.length > 0
-                        ? referencedItems.map(r => r.imageUrl)
-                        : undefined
-                }
-            };
+            // Handle different response types from webhook
+            if (webhookData.responseType === 'proposal' || webhookData.engineeredPrompt) {
+                const engineeredPrompt = webhookData.engineeredPrompt || webhookData.prompt || `High-end photography of ${text}`;
 
-            setMessages(prev => [...prev, proposalMsg]);
-            saveMessage(sessionId, proposalMsg);
+                const proposalMsg: ChatMessage = {
+                    id: uuidv4(),
+                    role: 'assistant',
+                    content: webhookData.content || "Here is a prompt based on your request:",
+                    type: 'proposal',
+                    proposal: {
+                        prompt: engineeredPrompt,
+                        status: 'pending',
+                        referenceImages: legacyReferencedItems.length > 0
+                            ? legacyReferencedItems.map(r => r.imageUrl)
+                            : undefined
+                    }
+                };
+
+                setMessages(prev => [...prev, proposalMsg]);
+                saveMessage(sessionId, proposalMsg);
+
+            } else {
+                // Regular text response
+                const botMsg: ChatMessage = {
+                    id: uuidv4(),
+                    role: 'assistant',
+                    content: webhookData.content || webhookData.message || "I understand. What would you like to do next?",
+                    type: 'text'
+                };
+
+                setMessages(prev => [...prev, botMsg]);
+                saveMessage(sessionId, botMsg);
+            }
 
         } catch (webhookError) {
             console.error('Webhook failed, using fallback prompt:', webhookError);
@@ -446,8 +562,8 @@ export default function Home() {
                 proposal: {
                     prompt: fallbackPrompt,
                     status: 'pending',
-                    referenceImages: referencedItems.length > 0
-                        ? referencedItems.map(r => r.imageUrl)
+                    referenceImages: legacyReferencedItems.length > 0
+                        ? legacyReferencedItems.map(r => r.imageUrl)
                         : undefined
                 }
             };
@@ -467,9 +583,10 @@ export default function Home() {
   const handleProposalAccept = async (msgId: string, prompt: string) => {
     if (!sessionId) return;
 
-    // Find the message to get the reference images
+    // Find the message to get the reference images and original prompt
     const message = messages.find(m => m.id === msgId);
     const referenceImagesUrls = message?.proposal?.referenceImages;
+    const originalPrompt = message?.proposal?.prompt || '';
 
     console.log('handleProposalAccept called:', {
         msgId,
@@ -478,6 +595,28 @@ export default function Home() {
         referenceImagesCount: referenceImagesUrls?.length || 0,
         referenceImages: referenceImagesUrls
     });
+
+    // Check if prompt was edited
+    const wasEdited = originalPrompt !== prompt;
+
+    // Notify webhook about prompt acceptance
+    try {
+        await fetch('https://maxipad.app.n8n.cloud/webhook/516eae5d-df11-4785-856e-d74a52e1552c', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({
+                messageType: 'prompt_accepted',
+                userId: userId,
+                sessionId: sessionId,
+                originalPrompt: originalPrompt,
+                finalPrompt: prompt,
+                wasEdited: wasEdited,
+                timestamp: new Date().toISOString()
+            })
+        });
+    } catch (webhookError) {
+        console.warn('Failed to notify webhook about prompt acceptance:', webhookError);
+    }
 
     setMessages(prev => prev.map(m =>
         m.id === msgId && m.proposal
@@ -793,6 +932,55 @@ export default function Home() {
       }
   };
 
+  const handleSaveFromStudio = async (newImageUrl: string, prompt: string) => {
+      if (!editingMoodItem || !sessionId || !userId) return;
+
+      // Create new item from the studio result
+      const newItem: MoodBoardItem = {
+          id: uuidv4(),
+          imageUrl: newImageUrl,
+          description: prompt,
+          name: `${editingMoodItem.name}_edited`,
+          isCurated: true,
+          orderIndex: moodBoardItems.length
+      };
+
+      setMoodBoardItems(prev => [...prev, newItem]);
+
+      // Upload to Supabase Storage if it's an external URL to persist it
+      // (Optional optimization: check if already a supabase URL)
+      let finalUrl = newImageUrl;
+      if (!newImageUrl.includes('supabase.co')) {
+          try {
+              const blob = await fetch(newImageUrl).then(r => r.blob());
+              const fileName = `${uuidv4()}.png`; // Assuming PNG from canvas/n8n
+              const filePath = `${sessionId}/${fileName}`;
+              const { error } = await supabase.storage.from('uploads').upload(filePath, blob);
+              if (!error) {
+                 const { data: { publicUrl } } = supabase.storage.from('uploads').getPublicUrl(filePath);
+                 finalUrl = publicUrl;
+                 // Update local state with persistent URL
+                 setMoodBoardItems(prev => prev.map(i => i.id === newItem.id ? { ...i, imageUrl: finalUrl } : i));
+              }
+          } catch (e) {
+              console.warn('Failed to persist studio image to storage', e);
+          }
+      }
+
+      await supabase.from('mood_board_items').insert({
+          id: newItem.id,
+          session_id: sessionId,
+          image_url: finalUrl,
+          description: prompt,
+          name: newItem.name,
+          order_index: moodBoardItems.length,
+          added_by: userId
+      });
+
+      setShowStudio(false);
+      setEditingMoodItem(null);
+  };
+
   return (
     <main className="flex h-screen bg-gray-50 overflow-hidden font-sans text-gray-900">
       <OnboardingModal isOpen={showOnboarding} onComplete={handleOnboardingComplete} />
@@ -857,8 +1045,18 @@ export default function Home() {
           </div>
       </div>
 
-      {/* Edit Modal */}
+      {/* Edit Modal or Studio */}
       {editingMoodItem && (
+        showStudio && sessionId && userId ? (
+            <ImageEditor
+                imageUrl={editingMoodItem.imageUrl}
+                initialDescription={editingMoodItem.description}
+                sessionId={sessionId}
+                userId={userId}
+                onClose={() => setShowStudio(false)}
+                onSave={handleSaveFromStudio}
+            />
+        ) : (
         <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
             <div className="bg-white rounded-2xl max-w-2xl w-full overflow-hidden shadow-2xl flex flex-col md:flex-row max-h-[80vh]">
                 {/* Image Preview */}
@@ -884,6 +1082,23 @@ export default function Home() {
                             className="p-1 hover:bg-gray-100 rounded-full disabled:opacity-50 disabled:cursor-not-allowed"
                         >
                             <LogOut size={20} />
+                        </button>
+                    </div>
+
+                    {/* Studio Entry Point */}
+                    <div className="p-4 bg-gradient-to-r from-blue-50 to-indigo-50 rounded-xl border border-blue-100">
+                        <h4 className="text-sm font-bold text-blue-900 mb-1 flex items-center gap-2">
+                            <Sparkles size={14} className="text-blue-600" />
+                            Studio Mode
+                        </h4>
+                        <p className="text-xs text-blue-700 mb-3">
+                            Open the advanced editor to use masking, inpainting, and more precise controls.
+                        </p>
+                        <button
+                            onClick={() => setShowStudio(true)}
+                            className="w-full py-2 bg-blue-600 text-white text-xs font-bold rounded-lg hover:bg-blue-700 transition-colors shadow-sm"
+                        >
+                            Edit Image Further
                         </button>
                     </div>
 
@@ -938,7 +1153,7 @@ export default function Home() {
                 </div>
             </div>
         </div>
-      )}
+      ))}
     </main>
   );
 }
