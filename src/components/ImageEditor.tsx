@@ -1,16 +1,10 @@
 'use client';
 
 import React, { useState, useRef, useEffect } from 'react';
-import { Send, X, Undo, Eraser, Brush, Save, Loader2, Edit2 } from 'lucide-react';
+import { Send, X, Undo, Redo, Eraser, Brush, Save, Loader2, Edit2 } from 'lucide-react';
 import CanvasLayer, { CanvasLayerRef } from './CanvasLayer';
 import { ChatMessage } from '@/types';
 import { v4 as uuidv4 } from 'uuid';
-import { fal } from '@fal-ai/client';
-
-// Configure FAL
-fal.config({
-  credentials: '90e9c562-fc27-474b-a672-d7f03da679f8:10858fb0c62da48c78d16d6f3e9aa7f1' // Security Notice: Exposed key for prototyping.
-});
 
 interface ImageEditorProps {
   imageUrl: string;
@@ -25,7 +19,7 @@ interface ImageEditorProps {
 }
 
 export default function ImageEditor({ 
-    imageUrl, 
+    imageUrl: initialImageUrl, // Rename prop to avoid confusion
     initialDescription, 
     initialName, 
     sessionId, 
@@ -35,6 +29,11 @@ export default function ImageEditor({
     onUpdateName, 
     onUpdateDescription 
 }: ImageEditorProps) {
+  // --- History & Undo/Redo State ---
+  const [history, setHistory] = useState<string[]>([initialImageUrl]);
+  const [historyIndex, setHistoryIndex] = useState(0);
+  const currentImageUrl = history[historyIndex];
+
   // Canvas & Image State
   const [imgDimensions, setImgDimensions] = useState<{ width: number; height: number } | null>(null);
   const [isDrawingMode, setIsDrawingMode] = useState(false);
@@ -42,7 +41,7 @@ export default function ImageEditor({
   const canvasRef = useRef<CanvasLayerRef>(null);
   const imageRef = useRef<HTMLImageElement>(null);
 
-  // Chat State
+  // Chat State (Text only now)
   const [messages, setMessages] = useState<ChatMessage[]>([
     {
       id: '1',
@@ -88,22 +87,75 @@ export default function ImageEditor({
     setImgDimensions({ width: naturalWidth, height: naturalHeight });
   };
 
-  // Helper: Convert Data URL to Blob for upload
-  const dataURLToBlob = (dataURL: string) => {
-    const arr = dataURL.split(',');
-    const mime = arr[0].match(/:(.*?);/)?.[1];
-    const bstr = atob(arr[1]);
-    let n = bstr.length;
-    const u8arr = new Uint8Array(n);
-    while (n--) {
-        u8arr[n] = bstr.charCodeAt(n);
+  const imageToBase64 = async (url: string): Promise<string> => {
+      const response = await fetch(url);
+      const blob = await response.blob();
+      return new Promise((resolve, reject) => {
+          const reader = new FileReader();
+          reader.onloadend = () => resolve(reader.result as string);
+          reader.onerror = reject;
+          reader.readAsDataURL(blob);
+      });
+  };
+
+  // Undo / Redo Logic
+  const handleUndo = () => {
+    if (historyIndex > 0) {
+        setHistoryIndex(prev => prev - 1);
+        // Clear mask on undo to avoid misalignment
+        canvasRef.current?.clear();
     }
-    return new Blob([u8arr], { type: mime });
+  };
+
+  const handleRedo = () => {
+    if (historyIndex < history.length - 1) {
+        setHistoryIndex(prev => prev + 1);
+        canvasRef.current?.clear();
+    }
+  };
+
+  // Helper: Create Composite Image (Base Image + Mask Strokes)
+  const getCompositeImage = async (baseImageUrl: string): Promise<string> => {
+      return new Promise(async (resolve, reject) => {
+          try {
+              // 1. Load Base Image
+              const img = new Image();
+              img.crossOrigin = "anonymous";
+              img.src = baseImageUrl;
+              await new Promise((r) => { img.onload = r; });
+
+              // 2. Setup Canvas
+              const canvas = document.createElement('canvas');
+              canvas.width = img.naturalWidth;
+              canvas.height = img.naturalHeight;
+              const ctx = canvas.getContext('2d');
+              if (!ctx) throw new Error('No context');
+
+              // 3. Draw Base Image
+              ctx.drawImage(img, 0, 0);
+
+              // 4. Draw Mask Layer (Green Strokes)
+              if (canvasRef.current) {
+                  const maskLayerData = canvasRef.current.getTransparentLayer(); // Needs implementation in CanvasLayer
+                  if (maskLayerData) {
+                      const maskImg = new Image();
+                      maskImg.src = maskLayerData;
+                      await new Promise((r) => { maskImg.onload = r; });
+                      ctx.drawImage(maskImg, 0, 0);
+                  }
+              }
+
+              resolve(canvas.toDataURL('image/png'));
+          } catch (e) {
+              reject(e);
+          }
+      });
   };
 
   const handleSend = async () => {
     if (!input.trim() || isGenerating) return;
     
+    // Add User Message
     const userMsg: ChatMessage = {
         id: uuidv4(),
         role: 'user',
@@ -116,72 +168,57 @@ export default function ImageEditor({
     setInput('');
 
     try {
-        const hasMask = canvasRef.current?.hasMask();
-        const maskDataUrl = hasMask ? canvasRef.current?.getMask() : null;
-
-        // 1. Upload Original Image to Fal Storage (if it's not already a public URL, but let's be safe)
-        // Note: Fal can take direct URLs, but if it's a blob/local, we must upload. 
-        // Assuming imageUrl is accessible. If it's a blob URL (from local state), we need to fetch and upload.
+        // Get Composite Image (Single image with mask visually applied)
+        const compositeImage = await getCompositeImage(currentImageUrl);
         
-        let finalImageUrl = imageUrl;
-        // Optimization: If imageUrl starts with http, send directly. If data:, upload.
-        if (imageUrl.startsWith('data:')) {
-             const file = dataURLToBlob(imageUrl);
-             finalImageUrl = await fal.storage.upload(file);
-        }
+        // Strip Data URI prefix to send ONLY raw base64
+        // e.g. "data:image/png;base64,iVBOR..." -> "iVBOR..."
+        const rawBase64 = compositeImage.split(',')[1];
 
-        let finalMaskUrl = null;
-        if (maskDataUrl) {
-            const maskFile = dataURLToBlob(maskDataUrl);
-            finalMaskUrl = await fal.storage.upload(maskFile);
-        }
-
-        console.log("Calling Fal.AI with:", { finalImageUrl, finalMaskUrl, prompt: currentPrompt });
-
-        // 2. Submit Request to Fal AI (Inpainting or regular Edit)
-        // Using 'fal-ai/qwen-image-edit/inpaint' for both, assuming it handles no mask gracefully?
-        // If no mask, maybe regular generation/edit? The prompt implies we use 'inpaint' endpoint per request.
+        // Use the single image endpoint (Visual Prompting)
+        let webhookUrl = 'https://maxipad.app.n8n.cloud/webhook/images'; 
         
-        const result: any = await fal.subscribe("fal-ai/qwen-image-edit/inpaint", {
-            input: {
-                prompt: currentPrompt,
-                image_url: finalImageUrl,
-                mask_url: finalMaskUrl,
-                image_size: "square_hd", // Or derive from aspect ratio
-                num_inference_steps: 30,
-                guidance_scale: 4,
-                enable_safety_checker: true,
-                output_format: "png"
-            },
-            logs: true,
-            onQueueUpdate: (update) => {
-                if (update.status === 'IN_PROGRESS') {
-                    console.log(update.logs);
-                }
-            }
+        let body: any = {
+            prompt: currentPrompt,
+            userId,
+            sessionId,
+            image: rawBase64 // Sends ONLY the raw base64 string
+        };
+
+        const response = await fetch(webhookUrl, {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(body)
         });
 
-        console.log("Fal Result:", result);
+        const data = await response.json();
         
-        // Handle result.data which contains images
-        // Schema: { images: [{ url: "..." }] } (Check specific model output schema, typically standard)
-        // Actually, Qwen model output might differ. Blueprint said `result.data`.
-        // Let's assume standard Fal image output: { images: [{ url: "..." }] } or just { image: { url: "..." } }
+        let resultImageUrl = data.outputImage || data.image || data.url;
         
-        // Qwen Inpaint Output Schema usually: { images: [ { url: "", width: 0, height: 0 } ] }
-        const outputUrl = result.data.images?.[0]?.url || result.data.image?.url;
+        if (resultImageUrl) {
+             // --- KEY CHANGE: Update Main Canvas instead of Chat ---
+             
+             // 1. Add to history stack
+             // Remove any "future" history if we were in the middle of the stack
+             const newHistory = history.slice(0, historyIndex + 1);
+             newHistory.push(resultImageUrl);
+             setHistory(newHistory);
+             setHistoryIndex(newHistory.length - 1);
 
-        if (outputUrl) {
+             // 2. Clear Mask
+             canvasRef.current?.clear();
+
+             // 3. Add success message to chat (text only)
              const botMsg: ChatMessage = {
                 id: uuidv4(),
                 role: 'assistant',
-                content: "Here is the updated version:",
-                type: 'image',
-                imageUrl: outputUrl
-            };
-            setMessages(prev => [...prev, botMsg]);
+                content: "Image updated based on your instructions.",
+                type: 'text'
+             };
+             setMessages(prev => [...prev, botMsg]);
+
         } else {
-             throw new Error("No image returned from Fal AI");
+             throw new Error("No image returned from API");
         }
 
     } catch (error) {
@@ -249,58 +286,93 @@ export default function ImageEditor({
                          {isSavingMeta ? 'Saving changes...' : 'Changes auto-saved'}
                      </span>
                 </div>
+
+                {/* Main Save Action moved to sidebar bottom for clarity */}
+                <div className="mt-auto pt-4">
+                    <button 
+                        onClick={() => onSave(currentImageUrl, "Studio Edit")}
+                        className="w-full py-3 bg-blue-600 text-white font-bold rounded-lg hover:bg-blue-700 transition-colors shadow-sm flex items-center justify-center gap-2"
+                    >
+                        <Save size={18} /> Save Changes to Board
+                    </button>
+                </div>
             </div>
         </div>
 
         {/* Column 2: Workspace (Center) */}
         <div className="flex-1 bg-gray-900 relative flex flex-col overflow-hidden">
             
-            {/* Toolbar */}
-            <div className="absolute top-6 left-6 z-30 flex gap-2 bg-black/40 backdrop-blur-md p-1.5 rounded-xl border border-white/10 shadow-xl">
-                <button 
-                    onClick={() => setIsDrawingMode(!isDrawingMode)}
-                    className={`px-3 py-2 rounded-lg transition-all flex items-center gap-2 ${isDrawingMode ? 'bg-blue-600 text-white shadow-lg shadow-blue-900/20' : 'text-white/70 hover:bg-white/10 hover:text-white'}`}
-                    title="Toggle Mask Brush"
-                >
-                    <Brush size={18} />
-                    <span className="text-xs font-medium hidden sm:inline">Mask</span>
-                </button>
+            {/* Top Toolbar: Undo/Redo & Tools */}
+            <div className="absolute top-6 left-6 right-6 z-30 flex justify-between items-start pointer-events-none">
                 
-                {isDrawingMode && (
-                    <>
-                        <div className="w-px h-6 bg-white/20 my-auto mx-1" />
-                        <div className="flex items-center gap-3 px-2">
-                             <div className="w-1.5 h-1.5 rounded-full bg-white/50" />
-                             <input 
-                                type="range" 
-                                min="5" 
-                                max="100" 
-                                value={brushSize} 
-                                onChange={(e) => setBrushSize(Number(e.target.value))}
-                                className="w-20 h-1 bg-white/30 rounded-lg appearance-none cursor-pointer accent-blue-500"
-                             />
-                             <div className="w-3 h-3 rounded-full bg-white/50" />
-                        </div>
-                        <div className="w-px h-6 bg-white/20 my-auto mx-1" />
-                        <button 
-                            onClick={() => canvasRef.current?.clear()}
-                            className="p-2 text-white/70 hover:text-red-400 hover:bg-white/10 rounded-lg transition-colors"
-                            title="Clear Mask"
-                        >
-                            <Eraser size={18} />
-                        </button>
-                    </>
-                )}
+                {/* Left: Drawing Tools */}
+                <div className="flex gap-2 bg-black/40 backdrop-blur-md p-1.5 rounded-xl border border-white/10 shadow-xl pointer-events-auto">
+                    <button 
+                        onClick={() => setIsDrawingMode(!isDrawingMode)}
+                        className={`px-3 py-2 rounded-lg transition-all flex items-center gap-2 ${isDrawingMode ? 'bg-blue-600 text-white shadow-lg shadow-blue-900/20' : 'text-white/70 hover:bg-white/10 hover:text-white'}`}
+                        title="Toggle Mask Brush"
+                    >
+                        <Brush size={18} />
+                        <span className="text-xs font-medium hidden sm:inline">Mask</span>
+                    </button>
+                    
+                    {isDrawingMode && (
+                        <>
+                            <div className="w-px h-6 bg-white/20 my-auto mx-1" />
+                            <div className="flex items-center gap-3 px-2">
+                                <div className="w-1.5 h-1.5 rounded-full bg-white/50" />
+                                <input 
+                                    type="range" 
+                                    min="5" 
+                                    max="100" 
+                                    value={brushSize} 
+                                    onChange={(e) => setBrushSize(Number(e.target.value))}
+                                    className="w-20 h-1 bg-white/30 rounded-lg appearance-none cursor-pointer accent-blue-500"
+                                />
+                                <div className="w-3 h-3 rounded-full bg-white/50" />
+                            </div>
+                            <div className="w-px h-6 bg-white/20 my-auto mx-1" />
+                            <button 
+                                onClick={() => canvasRef.current?.clear()}
+                                className="p-2 text-white/70 hover:text-red-400 hover:bg-white/10 rounded-lg transition-colors"
+                                title="Clear Mask"
+                            >
+                                <Eraser size={18} />
+                            </button>
+                        </>
+                    )}
+                </div>
+
+                {/* Right: History Controls */}
+                <div className="flex gap-2 bg-black/40 backdrop-blur-md p-1.5 rounded-xl border border-white/10 shadow-xl pointer-events-auto">
+                    <button 
+                        onClick={handleUndo}
+                        disabled={historyIndex === 0}
+                        className="p-2 text-white/70 hover:text-white hover:bg-white/10 rounded-lg transition-colors disabled:opacity-30 disabled:cursor-not-allowed"
+                        title="Undo"
+                    >
+                        <Undo size={18} />
+                    </button>
+                    <div className="w-px h-6 bg-white/20 my-auto mx-1" />
+                    <button 
+                        onClick={handleRedo}
+                        disabled={historyIndex === history.length - 1}
+                        className="p-2 text-white/70 hover:text-white hover:bg-white/10 rounded-lg transition-colors disabled:opacity-30 disabled:cursor-not-allowed"
+                        title="Redo"
+                    >
+                        <Redo size={18} />
+                    </button>
+                </div>
             </div>
 
             {/* Canvas Area */}
             <div className="flex-1 overflow-hidden flex items-center justify-center p-8 bg-[url('/globe.svg')] bg-center bg-no-repeat bg-opacity-5">
                 <div className="relative shadow-2xl ring-1 ring-white/10 rounded-sm">
-                    {/* Base Image */}
+                    {/* Base Image (Dynamic Source) */}
                     {/* eslint-disable-next-line @next/next/no-img-element */}
                     <img 
                         ref={imageRef}
-                        src={imageUrl} 
+                        src={currentImageUrl} 
                         alt="Editing target"
                         onLoad={handleImageLoad}
                         className="max-w-full max-h-[75vh] object-contain select-none pointer-events-none" 
@@ -338,20 +410,7 @@ export default function ImageEditor({
                                 : 'bg-white text-gray-800 border border-gray-100 rounded-bl-sm'
                          }`}>
                              {msg.content && <p className="leading-relaxed">{msg.content}</p>}
-                             {msg.type === 'image' && msg.imageUrl && (
-                                 <div className="mt-3 rounded-lg overflow-hidden border border-gray-100 shadow-sm group relative">
-                                     {/* eslint-disable-next-line @next/next/no-img-element */}
-                                     <img src={msg.imageUrl} alt="Result" className="w-full h-auto bg-gray-100" />
-                                     <div className="absolute inset-0 bg-black/60 opacity-0 group-hover:opacity-100 transition-opacity flex items-center justify-center gap-2">
-                                         <button 
-                                            onClick={() => onSave(msg.imageUrl!, "Edited Image")}
-                                            className="bg-white text-black text-xs font-bold px-4 py-2 rounded-full hover:bg-gray-100 transform hover:scale-105 transition-all flex items-center gap-2"
-                                         >
-                                             <Save size={14} /> Save to Board
-                                         </button>
-                                     </div>
-                                 </div>
-                             )}
+                             {/* Removed Image display here as it updates the main canvas now */}
                          </div>
                      </div>
                  ))}

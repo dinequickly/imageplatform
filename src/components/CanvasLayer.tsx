@@ -12,7 +12,8 @@ interface CanvasLayerProps {
 }
 
 export interface CanvasLayerRef {
-  getMask: () => string | null; // Returns base64 data URL or null if empty
+  getMask: () => string | null; // Returns base64 data URL of Binary Mask (B&W)
+  getTransparentLayer: () => string | null; // Returns base64 data URL of Visible Strokes (Transparent)
   clear: () => void;
   hasMask: () => boolean;
 }
@@ -66,6 +67,13 @@ const CanvasLayer = forwardRef<CanvasLayerRef, CanvasLayerProps>(
         });
 
         return maskCanvas.toDataURL('image/png');
+      },
+      getTransparentLayer: () => {
+          // Returns the current canvas state (strokes on transparent bg)
+          // Note: The main canvas IS the transparent layer showing to the user.
+          // We can just export it directly.
+          if (!canvasRef.current || paths.length === 0) return null;
+          return canvasRef.current.toDataURL('image/png');
       },
       clear: () => {
         setPaths([]);
