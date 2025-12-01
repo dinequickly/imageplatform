@@ -23,7 +23,6 @@ export default function Home() {
   const [userId, setUserId] = useState<string | null>(null);
   const [showOnboarding, setShowOnboarding] = useState(false);
   const [editingMoodItem, setEditingMoodItem] = useState<MoodBoardItem | null>(null);
-  const [showStudio, setShowStudio] = useState(false);
 
   const router = useRouter();
   const supabase = createClient();
@@ -977,7 +976,6 @@ export default function Home() {
           added_by: userId
       });
 
-      setShowStudio(false);
       setEditingMoodItem(null);
   };
 
@@ -1045,115 +1043,20 @@ export default function Home() {
           </div>
       </div>
 
-      {/* Edit Modal or Studio */}
-      {editingMoodItem && (
-        showStudio && sessionId && userId ? (
-            <ImageEditor
-                imageUrl={editingMoodItem.imageUrl}
-                initialDescription={editingMoodItem.description}
-                sessionId={sessionId}
-                userId={userId}
-                onClose={() => setShowStudio(false)}
-                onSave={handleSaveFromStudio}
-            />
-        ) : (
-        <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
-            <div className="bg-white rounded-2xl max-w-2xl w-full overflow-hidden shadow-2xl flex flex-col md:flex-row max-h-[80vh]">
-                {/* Image Preview */}
-                <div className="w-full md:w-1/2 bg-gray-100 relative min-h-[300px]">
-                    <img src={editingMoodItem.imageUrl} className="w-full h-full object-contain absolute inset-0" />
-                    {isGenerating && (
-                        <div className="absolute inset-0 bg-black/50 flex items-center justify-center">
-                            <div className="bg-white rounded-lg p-4 flex flex-col items-center gap-2">
-                                <div className="animate-spin rounded-full h-8 w-8 border-b-2 border-blue-600"></div>
-                                <p className="text-sm font-medium text-gray-700">Modifying image...</p>
-                            </div>
-                        </div>
-                    )}
-                </div>
-
-                {/* Controls */}
-                <div className="w-full md:w-1/2 p-6 flex flex-col gap-6 overflow-y-auto">
-                    <div className="flex justify-between items-start">
-                        <h3 className="text-lg font-bold">Edit Image</h3>
-                        <button
-                            onClick={() => setEditingMoodItem(null)}
-                            disabled={isGenerating}
-                            className="p-1 hover:bg-gray-100 rounded-full disabled:opacity-50 disabled:cursor-not-allowed"
-                        >
-                            <LogOut size={20} />
-                        </button>
-                    </div>
-
-                    {/* Studio Entry Point */}
-                    <div className="p-4 bg-gradient-to-r from-blue-50 to-indigo-50 rounded-xl border border-blue-100">
-                        <h4 className="text-sm font-bold text-blue-900 mb-1 flex items-center gap-2">
-                            <Sparkles size={14} className="text-blue-600" />
-                            Studio Mode
-                        </h4>
-                        <p className="text-xs text-blue-700 mb-3">
-                            Open the advanced editor to use masking, inpainting, and more precise controls.
-                        </p>
-                        <button
-                            onClick={() => setShowStudio(true)}
-                            className="w-full py-2 bg-blue-600 text-white text-xs font-bold rounded-lg hover:bg-blue-700 transition-colors shadow-sm"
-                        >
-                            Edit Image Further
-                        </button>
-                    </div>
-
-                    {/* Description Editor */}
-                    <div>
-                        <label className="block text-xs font-semibold text-gray-500 uppercase mb-2">Description</label>
-                        <textarea
-                            className="w-full p-3 border border-gray-200 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 outline-none resize-none disabled:opacity-50"
-                            rows={4}
-                            value={editingMoodItem.description || ''}
-                            onChange={(e) => handleUpdateDescription(e.target.value)}
-                            placeholder="Add a description..."
-                            disabled={isGenerating}
-                        />
-                        <div className="text-xs text-gray-400 mt-1 text-right">Saved automatically</div>
-                    </div>
-
-                    {/* AI Modification */}
-                    <div className="pt-6 border-t border-gray-100">
-                        <label className="block text-xs font-semibold text-blue-600 uppercase mb-2 flex items-center gap-2">
-                            Modify with AI <span className="bg-blue-100 text-blue-600 px-2 py-0.5 rounded-full text-[10px]">Beta</span>
-                        </label>
-                        <div className="flex gap-2">
-                            <input
-                                type="text"
-                                id="modifyInput"
-                                className="flex-1 p-3 border border-gray-200 rounded-lg text-sm focus:ring-2 focus:ring-blue-500 outline-none disabled:opacity-50"
-                                placeholder="e.g. Make it cyberpunk style"
-                                disabled={isGenerating}
-                                onKeyDown={(e) => {
-                                    if (e.key === 'Enter' && !isGenerating) {
-                                        handleModifyImage(e.currentTarget.value);
-                                        e.currentTarget.value = '';
-                                    }
-                                }}
-                            />
-                            <button
-                                onClick={() => {
-                                    const input = document.getElementById('modifyInput') as HTMLInputElement;
-                                    if (input.value) {
-                                        handleModifyImage(input.value);
-                                        input.value = '';
-                                    }
-                                }}
-                                disabled={isGenerating}
-                                className="bg-blue-600 text-white px-4 py-2 rounded-lg text-sm font-medium hover:bg-blue-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-                            >
-                                {isGenerating ? 'Processing...' : 'Go'}
-                            </button>
-                        </div>
-                    </div>
-                </div>
-            </div>
-        </div>
-      ))}
+      {/* Studio Editor (Replaces old modal) */}
+      {editingMoodItem && sessionId && userId && (
+        <ImageEditor
+            imageUrl={editingMoodItem.imageUrl}
+            initialDescription={editingMoodItem.description}
+            initialName={editingMoodItem.name}
+            sessionId={sessionId}
+            userId={userId}
+            onClose={() => setEditingMoodItem(null)}
+            onSave={handleSaveFromStudio}
+            onUpdateName={(name) => handleUpdateName(editingMoodItem.id, name)}
+            onUpdateDescription={(desc) => handleUpdateDescription(desc)}
+        />
+      )}
     </main>
   );
 }
