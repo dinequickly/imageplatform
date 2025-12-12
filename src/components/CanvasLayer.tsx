@@ -16,6 +16,7 @@ export interface CanvasLayerRef {
   getTransparentLayer: () => string | null; // Returns base64 data URL of Visible Strokes (Transparent)
   clear: () => void;
   hasMask: () => boolean;
+  drawMask: (maskDataUrl: string) => void;
 }
 
 interface Point {
@@ -33,11 +34,12 @@ const CanvasLayer = forwardRef<CanvasLayerRef, CanvasLayerProps>(
     const canvasRef = useRef<HTMLCanvasElement>(null);
     const [paths, setPaths] = useState<Path[]>([]);
     const [currentPath, setCurrentPath] = useState<Point[]>([]);
+    const [externalMask, setExternalMask] = useState<HTMLImageElement | null>(null);
     const isDrawingRef = useRef(false);
 
     useImperativeHandle(ref, () => ({
       getMask: () => {
-        if (paths.length === 0) return null;
+        if (paths.length === 0 && !externalMask) return null;
 
         // Create an offscreen canvas to generate the binary mask
         const maskCanvas = document.createElement('canvas');
@@ -50,7 +52,17 @@ const CanvasLayer = forwardRef<CanvasLayerRef, CanvasLayerProps>(
         ctx.fillStyle = 'black';
         ctx.fillRect(0, 0, width, height);
 
-        // 2. Draw paths with White
+        // 2. Draw external mask if exists (assume it's white or colored on transparent)
+        if (externalMask) {
+            ctx.drawImage(externalMask, 0, 0, width, height);
+            // Ensure it's white for the mask
+            ctx.globalCompositeOperation = 'source-in';
+            ctx.fillStyle = 'white';
+            ctx.fillRect(0, 0, width, height);
+            ctx.globalCompositeOperation = 'source-over';
+        }
+
+        // 3. Draw paths with White
         ctx.lineCap = 'round';
         ctx.lineJoin = 'round';
         ctx.strokeStyle = 'white';
@@ -70,20 +82,26 @@ const CanvasLayer = forwardRef<CanvasLayerRef, CanvasLayerProps>(
       },
       getTransparentLayer: () => {
           // Returns the current canvas state (strokes on transparent bg)
-          // Note: The main canvas IS the transparent layer showing to the user.
-          // We can just export it directly.
-          if (!canvasRef.current || paths.length === 0) return null;
+          if (!canvasRef.current || (paths.length === 0 && !externalMask)) return null;
           return canvasRef.current.toDataURL('image/png');
       },
       clear: () => {
         setPaths([]);
+        setExternalMask(null);
         const canvas = canvasRef.current;
         const ctx = canvas?.getContext('2d');
         if (canvas && ctx) {
           ctx.clearRect(0, 0, canvas.width, canvas.height);
         }
       },
-      hasMask: () => paths.length > 0
+      hasMask: () => paths.length > 0 || !!externalMask,
+      drawMask: (maskDataUrl: string) => {
+          const img = new Image();
+          img.onload = () => {
+              setExternalMask(img);
+          };
+          img.src = maskDataUrl;
+      }
     }));
 
     // Re-draw visible canvas when paths change
@@ -94,6 +112,11 @@ const CanvasLayer = forwardRef<CanvasLayerRef, CanvasLayerProps>(
 
       ctx.clearRect(0, 0, width, height);
       
+      // Draw External Mask
+      if (externalMask) {
+          ctx.drawImage(externalMask, 0, 0, width, height);
+      }
+
       // Visual Style: Semi-transparent Neon Green
       ctx.lineCap = 'round';
       ctx.lineJoin = 'round';
@@ -122,7 +145,7 @@ const CanvasLayer = forwardRef<CanvasLayerRef, CanvasLayerProps>(
         ctx.stroke();
       }
 
-    }, [paths, currentPath, width, height, brushSize]);
+    }, [paths, currentPath, width, height, brushSize, externalMask]);
 
     const getCoords = (e: React.MouseEvent | React.TouchEvent) => {
         const canvas = canvasRef.current;

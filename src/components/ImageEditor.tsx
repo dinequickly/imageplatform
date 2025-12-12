@@ -1,7 +1,7 @@
 'use client';
 
 import React, { useState, useRef, useEffect } from 'react';
-import { Send, X, Undo, Redo, Eraser, Brush, Save, Loader2, Edit2 } from 'lucide-react';
+import { Send, X, Undo, Redo, Eraser, Brush, Save, Loader2, Edit2, Scan } from 'lucide-react';
 import CanvasLayer, { CanvasLayerRef } from './CanvasLayer';
 import { ChatMessage } from '@/types';
 import { v4 as uuidv4 } from 'uuid';
@@ -52,6 +52,7 @@ export default function ImageEditor({
   ]);
   const [input, setInput] = useState('');
   const [isGenerating, setIsGenerating] = useState(false);
+  const [isSegmenting, setIsSegmenting] = useState(false);
 
   // Metadata State
   const [name, setName] = useState(initialName || '');
@@ -112,6 +113,71 @@ export default function ImageEditor({
         setHistoryIndex(prev => prev + 1);
         canvasRef.current?.clear();
     }
+  };
+
+  const handleSegment = async () => {
+      if (isSegmenting || !currentImageUrl) return;
+      setIsSegmenting(true);
+      
+      try {
+          // Get base64 of current image
+          const imageBase64 = await imageToBase64(currentImageUrl);
+          
+          const response = await fetch('/api/segment', {
+              method: 'POST',
+              headers: { 'Content-Type': 'application/json' },
+              body: JSON.stringify({ imageBase64 })
+          });
+          
+          const data = await response.json();
+          
+          if (data.error) throw new Error(data.error);
+          
+          if (data.type === 'image') {
+              canvasRef.current?.drawMask(data.data);
+          } else if (data.type === 'masks' && Array.isArray(data.data)) {
+              // Composite masks
+              const canvas = document.createElement('canvas');
+              if (imgDimensions) {
+                  canvas.width = imgDimensions.width;
+                  canvas.height = imgDimensions.height;
+                  const ctx = canvas.getContext('2d');
+                  if (ctx) {
+                      // Draw each mask
+                      for (const item of data.data) {
+                          if (item.mask) { // item.mask is base64 string
+                             const maskImg = new Image();
+                             // Handle if mask is raw base64 or data uri
+                             maskImg.src = item.mask.startsWith('data:') ? item.mask : `data:image/png;base64,${item.mask}`;
+                             await new Promise((resolve) => { maskImg.onload = resolve; });
+                             ctx.drawImage(maskImg, 0, 0, canvas.width, canvas.height);
+                          }
+                      }
+                      canvasRef.current?.drawMask(canvas.toDataURL('image/png'));
+                  }
+              }
+          }
+          
+          const botMsg: ChatMessage = {
+              id: uuidv4(),
+              role: 'assistant',
+              content: "I've automatically segmented the image for you.",
+              type: 'text'
+          };
+          setMessages(prev => [...prev, botMsg]);
+
+      } catch (error) {
+          console.error("Segmentation failed:", error);
+           const errorMsg: ChatMessage = {
+              id: uuidv4(),
+              role: 'assistant',
+              content: "Could not auto-segment the image. Please try manually masking.",
+              type: 'text'
+          };
+          setMessages(prev => [...prev, errorMsg]);
+      } finally {
+          setIsSegmenting(false);
+      }
   };
 
   // Helper: Create Composite Image (Base Image + Mask Strokes)
@@ -314,6 +380,16 @@ export default function ImageEditor({
                     >
                         <Brush size={18} />
                         <span className="text-xs font-medium hidden sm:inline">Mask</span>
+                    </button>
+
+                    <button 
+                        onClick={handleSegment}
+                        disabled={isSegmenting}
+                        className={`px-3 py-2 rounded-lg transition-all flex items-center gap-2 ${isSegmenting ? 'bg-blue-600/50 cursor-not-allowed' : 'text-white/70 hover:bg-white/10 hover:text-white'}`}
+                        title="Auto Segment"
+                    >
+                        {isSegmenting ? <Loader2 size={18} className="animate-spin" /> : <Scan size={18} />}
+                        <span className="text-xs font-medium hidden sm:inline">Segment</span>
                     </button>
                     
                     {isDrawingMode && (
