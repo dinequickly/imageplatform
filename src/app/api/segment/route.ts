@@ -1,4 +1,6 @@
 import { NextResponse } from 'next/server';
+import { spawn } from 'child_process';
+import path from 'path';
 
 export async function POST(request: Request) {
     try {
@@ -12,6 +14,7 @@ export async function POST(request: Request) {
             );
         }
 
+<<<<<<< HEAD
         // Get HF API key from environment
         const apiKey = process.env.HF_API_KEY;
         if (!apiKey) {
@@ -25,60 +28,60 @@ export async function POST(request: Request) {
 
         // Strip header if present
         const base64Data = imageBase64.replace(/^data:image\/\w+;base64,/, '');
+=======
+        // Path to the python script
+        const scriptPath = path.join(process.cwd(), 'src', 'scripts', 'segment.py');
+>>>>>>> 56d7dde (Sam3 fixed hope)
         
-        // Convert base64 to binary for HF API
-        const buffer = Buffer.from(base64Data, 'base64');
+        // Use the python executable from the conda environment
+        const pythonExec = '/opt/miniconda3/envs/sam3_env/bin/python';
 
-        console.log(`Calling Hugging Face Inference API (${model})...`);
+        return new Promise((resolve) => {
+            const pythonProcess = spawn(pythonExec, [scriptPath]);
+            
+            let dataString = '';
+            let errorString = '';
 
-        const response = await fetch(endpoint, {
-            method: 'POST',
-            headers: {
-                'Authorization': `Bearer ${apiKey}`,
-                'Content-Type': 'application/json' // HF often accepts raw bytes too, but JSON with inputs is safer for some models
-            },
-            body: buffer // Send raw image bytes
+            // Send data to python script
+            pythonProcess.stdin.write(JSON.stringify({ imageBase64 }));
+            pythonProcess.stdin.end();
+
+            pythonProcess.stdout.on('data', (data) => {
+                dataString += data.toString();
+            });
+
+            pythonProcess.stderr.on('data', (data) => {
+                errorString += data.toString();
+                console.error('Python Error:', data.toString());
+            });
+
+            pythonProcess.on('close', (code) => {
+                if (code !== 0) {
+                    resolve(NextResponse.json(
+                        { error: `Process exited with code ${code}`, details: errorString },
+                        { status: 500 }
+                    ));
+                    return;
+                }
+
+                try {
+                    const result = JSON.parse(dataString);
+                    if (result.error) {
+                        resolve(NextResponse.json(
+                            { error: result.error },
+                            { status: 500 }
+                        ));
+                    } else {
+                        resolve(NextResponse.json(result));
+                    }
+                } catch (e) {
+                    resolve(NextResponse.json(
+                        { error: 'Failed to parse python output', raw: dataString },
+                        { status: 500 }
+                    ));
+                }
+            });
         });
-
-        if (!response.ok) {
-            const errorText = await response.text();
-            console.error('HF API Error:', {
-                status: response.status,
-                statusText: response.statusText,
-                body: errorText
-            });
-            throw new Error(`HF Error: ${response.status} - ${errorText}`);
-        }
-
-        // Check content type
-        const contentType = response.headers.get('content-type');
-        
-        if (contentType?.includes('image/')) {
-            // If it returns an image directly
-            const blob = await response.blob();
-            const arrayBuffer = await blob.arrayBuffer();
-            const buffer = Buffer.from(arrayBuffer);
-            const base64 = buffer.toString('base64');
-            const mimeType = contentType;
-            return NextResponse.json({ 
-                type: 'image',
-                data: `data:${mimeType};base64,${base64}` 
-            });
-        } else {
-            // Assume JSON (list of masks)
-            const data = await response.json();
-            // console.log('HF Response:', data);
-            
-            // data should be array of { score, label, mask (base64) }
-            // We need to composite these into a single image or return them.
-            // For simplicity, let's try to composite them on the client or return the first one?
-            // "Segment all items" -> return all masks.
-            
-            return NextResponse.json({ 
-                type: 'masks',
-                data: data 
-            });
-        }
 
     } catch (error: any) {
         console.error('Segmentation error:', error);
