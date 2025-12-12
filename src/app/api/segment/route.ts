@@ -14,26 +14,13 @@ export async function POST(request: Request) {
             );
         }
 
-<<<<<<< HEAD
-        // Get HF API key from environment
-        const apiKey = process.env.HF_API_KEY;
-        if (!apiKey) {
-            throw new Error('HF_API_KEY environment variable is not set');
-        }
-
-        // Model ID - user requested SAM3
-        // If SAM3 endpoint isn't working, we can fallback or user can change it.
-        const model = "facebook/sam3"; // Or "facebook/sam-vit-huge"
-        const endpoint = `https://router.huggingface.co/models/${model}`;
-
-        // Strip header if present
-        const base64Data = imageBase64.replace(/^data:image\/\w+;base64,/, '');
-=======
         // Path to the python script
         const scriptPath = path.join(process.cwd(), 'src', 'scripts', 'segment.py');
->>>>>>> 56d7dde (Sam3 fixed hope)
         
         // Use the python executable from the conda environment
+        // Note: This path is specific to the local machine setup. 
+        // For production deployment (e.g. Vercel), this will FAIL unless the environment is set up exactly the same way (which is hard on Vercel serverless).
+        // If deploying to Vercel, you cannot use local conda environments or spawn python scripts easily without custom build steps or using a separate backend.
         const pythonExec = '/opt/miniconda3/envs/sam3_env/bin/python';
 
         return new Promise((resolve) => {
