@@ -21,7 +21,7 @@ export async function POST(request: Request) {
         // Model ID - user requested SAM3
         // If SAM3 endpoint isn't working, we can fallback or user can change it.
         const model = "facebook/sam3"; // Or "facebook/sam-vit-huge"
-        const endpoint = `https://api-inference.huggingface.co/models/${model}`;
+        const endpoint = `https://router.huggingface.co/models/${model}`;
 
         // Strip header if present
         const base64Data = imageBase64.replace(/^data:image\/\w+;base64,/, '');
