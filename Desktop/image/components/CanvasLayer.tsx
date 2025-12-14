@@ -15,6 +15,7 @@ export interface CanvasLayerRef {
   clear: () => void
   drawBase64Mask: (base64: string) => void
   drawBox: (x: number, y: number, w: number, h: number) => void
+  highlightBox: (x: number, y: number, w: number, h: number) => void
 }
 
 const CanvasLayer = forwardRef<CanvasLayerRef, CanvasLayerProps>(({ width, height, brushSize, mode, className }, ref) => {
@@ -166,26 +167,29 @@ const CanvasLayer = forwardRef<CanvasLayerRef, CanvasLayerProps>(({ width, heigh
         ref={canvasRef}
         width={width}
         height={height}
-        className={`w-full h-full ${mode === 'brush' ? 'cursor-none' : 'cursor-crosshair'}`}
+        className="w-full h-full cursor-none"
         onMouseDown={startDrawing}
         onMouseUp={stopDrawing}
-        onMouseOut={stopDrawing} 
+        onMouseOut={stopDrawing}
         onMouseMove={handleMouseMove}
         onMouseLeave={() => setMousePos(null)}
-        
+
         onTouchStart={startDrawing}
         onTouchEnd={stopDrawing}
         onTouchMove={draw}
       />
-      {mousePos && mode === 'brush' && (
-        <div 
-          className="pointer-events-none absolute border border-white rounded-full bg-white/20 backdrop-invert"
+      {mousePos && (
+        <div
+          className="pointer-events-none absolute rounded-full z-50"
           style={{
             left: mousePos.x,
             top: mousePos.y,
-            width: brushSize,
-            height: brushSize,
+            width: mode === 'lasso' ? 16 : brushSize,
+            height: mode === 'lasso' ? 16 : brushSize,
             transform: 'translate(-50%, -50%)',
+            backgroundColor: 'rgba(59, 130, 246, 0.4)',
+            border: '2px solid rgba(37, 99, 235, 0.8)',
+            boxShadow: '0 0 0 1px rgba(255, 255, 255, 0.5)',
           }}
         />
       )}

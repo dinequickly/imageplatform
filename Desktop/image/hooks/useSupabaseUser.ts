@@ -25,17 +25,33 @@ export function useSupabaseUser() {
     async function ensureUser() {
       try {
         const { data, error: getUserError } = await supabase.auth.getUser()
-        if (getUserError) throw getUserError
-
-        if (data.user) {
+        
+        // If we have a user, set it and finish
+        if (data?.user) {
           if (!mounted) return
           setUser(data.user)
           setLoading(false)
           return
         }
 
+        // If getUser failed (likely no session), or no user returned, try anonymous sign-in
+        // We log the error for debugging but don't stop execution
+        if (getUserError) {
+             console.log("getUser failed, attempting anonymous sign-in:", getUserError.message)
+        }
+
         const { data: anonData, error: anonError } = await supabase.auth.signInAnonymously()
-        if (anonError) throw anonError
+        if (anonError) {
+             // If anonymous sign-in is disabled, we just don't have a user. This is fine.
+             if (anonError.message?.includes("Anonymous sign-ins are disabled")) {
+                 console.log("Anonymous sign-in disabled, proceeding as guest.");
+                 if (!mounted) return
+                 setUser(null)
+                 setLoading(false)
+                 return
+             }
+             throw anonError
+        }
 
         if (!mounted) return
         setUser(anonData.user ?? null)

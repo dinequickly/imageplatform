@@ -2,26 +2,30 @@
 
 import React, { useCallback, useState } from 'react'
 import { useDropzone } from 'react-dropzone'
-import { Upload, Loader2, FileImage } from 'lucide-react'
+import { Upload, Loader2 } from 'lucide-react'
 import { supabase } from '@/lib/supabaseClient'
 
 interface FileUploaderProps {
-  folderId: string
-  userId: string
+  sessionId?: string
+  folderId?: string
+  userId?: string
   onUploadComplete: () => void
 }
 
-export default function FileUploader({ folderId, userId, onUploadComplete }: FileUploaderProps) {
+export default function FileUploader({ sessionId, folderId, userId, onUploadComplete }: FileUploaderProps) {
   const [uploading, setUploading] = useState(false)
 
   const onDrop = useCallback(async (acceptedFiles: File[]) => {
-    if (acceptedFiles.length === 0 || !folderId || !userId) return
+    if (acceptedFiles.length === 0) return
+    if (!sessionId && (!folderId || !userId)) return // Must have either session OR user+folder
+    
     setUploading(true)
 
     try {
       const uploadPromises = acceptedFiles.map(async (file) => {
         const fileExt = file.name.split('.').pop()
-        const fileName = `${userId}/${folderId}/${Math.random()}.${fileExt}`
+        const pathPrefix = userId ? `${userId}/${folderId}` : sessionId
+        const fileName = `${pathPrefix}/${Math.random()}.${fileExt}`
         
         // 1. Upload to Storage
         const { error: uploadError } = await supabase.storage
@@ -34,17 +38,31 @@ export default function FileUploader({ folderId, userId, onUploadComplete }: Fil
           .from('uploads')
           .getPublicUrl(fileName)
 
-        // 2. Add to Library
-        const { error: insertError } = await supabase
-          .from('folder_items')
-          .insert({
-            folder_id: folderId,
-            image_url: publicUrl,
-            title: file.name,
-            added_by: userId,
-          })
-
-        if (insertError) throw insertError
+        // 2. Add to DB
+        if (userId && folderId) {
+            // Authenticated: Add to Folder Items
+            const { error: insertError } = await supabase
+              .from('folder_items')
+              .insert({
+                folder_id: folderId,
+                image_url: publicUrl,
+                title: file.name,
+                added_by: userId,
+              })
+            if (insertError) throw insertError
+        } else if (sessionId) {
+            // Anonymous: Add to Mood Board Items
+            const { error: insertError } = await supabase
+              .from('mood_board_items')
+              .insert({
+                session_id: sessionId,
+                image_url: publicUrl,
+                name: file.name,
+                order_index: 0, 
+                is_curated: false
+              })
+            if (insertError) throw insertError
+        }
       })
 
       await Promise.all(uploadPromises)
@@ -56,7 +74,7 @@ export default function FileUploader({ folderId, userId, onUploadComplete }: Fil
     } finally {
       setUploading(false)
     }
-  }, [folderId, userId, onUploadComplete])
+  }, [sessionId, folderId, userId, onUploadComplete])
 
   const { getRootProps, getInputProps, isDragActive } = useDropzone({ 
     onDrop,

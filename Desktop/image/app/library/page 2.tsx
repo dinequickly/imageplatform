@@ -4,11 +4,9 @@ import React, { useState, useEffect } from 'react'
 import { useSession } from '@/hooks/useSession'
 import { useSupabaseUser } from '@/hooks/useSupabaseUser'
 import { supabase } from '@/lib/supabaseClient'
-import { getOrCreateDefaultFolderId } from '@/lib/library'
 import FileUploader from '@/components/FileUploader'
-import AuthDialog from '@/components/AuthDialog'
 import Link from 'next/link'
-import { ArrowLeft, Search, Image as ImageIcon, Loader2, Upload, ScanSearch, LogIn, LogOut } from 'lucide-react'
+import { ArrowLeft, Search, Image as ImageIcon, Loader2, Upload, ScanSearch } from 'lucide-react'
 
 interface LibraryItem {
   id: string
@@ -18,136 +16,35 @@ interface LibraryItem {
 }
 
 export default function LibraryPage() {
-  const { sessionId, loading: sessionLoading, error: sessionError } = useSession()
-  const { user, loading: userLoading, error: userError } = useSupabaseUser()
+  const { sessionId, loading: sessionLoading } = useSession()
+  const { user, loading: userLoading } = useSupabaseUser()
   const [items, setItems] = useState<LibraryItem[]>([])
-  const [fetching, setFetching] = useState(false)
+  const [fetching, setFetching] = useState(true)
   const [searchQuery, setSearchQuery] = useState('')
-
+  
   // Object Search State
   const [objectSearchQuery, setObjectSearchQuery] = useState('')
   const [objectSearchResults, setObjectSearchResults] = useState<LibraryItem[]>([])
   const [isSearchingObject, setIsSearchingObject] = useState(false)
-  const [isAuthOpen, setIsAuthOpen] = useState(false)
-  const [folderId, setFolderId] = useState<string | null>(null)
 
   useEffect(() => {
-    if (user?.id) {
-        getOrCreateDefaultFolderId(user.id).then(setFolderId)
-    }
-  }, [user?.id])
-
-  useEffect(() => {
-    console.log('useEffect triggered - user:', user, 'userLoading:', userLoading, 'sessionId:', sessionId, 'sessionLoading:', sessionLoading)
-    if (userError) console.error('User Error:', userError)
-    if (sessionError) console.error('Session Error:', sessionError)
-
-    if (user?.id || (!userLoading && sessionId)) {
-      console.log('Fetching items (user or session available)')
-      fetchLibraryItems()
-    } else if (!userLoading && !sessionLoading) {
-      // If both loaded but nothing available
-      console.log('No user or session - showing empty state')
-      setFetching(false)
-      setItems([])
-    }
-  }, [user?.id, userLoading, sessionId, sessionLoading])
-
-  async function handleSignOut() {
-    await supabase.auth.signOut()
-    window.location.reload()
-  }
+    if (sessionId) fetchLibraryItems()
+  }, [sessionId])
 
   async function fetchLibraryItems() {
+    if (!sessionId) return
     setFetching(true)
+    const { data, error } = await supabase
+      .from('mood_board_items')
+      .select('id, image_url, name, created_at, mask_url') // Fetch mask_url as well
+      .eq('session_id', sessionId)
+      .order('created_at', { ascending: false })
 
-    // If we have a user, fetch from their folders AND their mood board items
-    if (user?.id) {
-      console.log('Fetching library items for user:', user.id)
-      let combinedItems: LibraryItem[] = []
-
-      // 1. Fetch Folder Items
-      const { data: folders, error: foldersError } = await supabase
-        .from('folders')
-        .select('id')
-        .eq('user_id', user.id)
-
-      if (!foldersError && folders && folders.length > 0) {
-        const folderIds = folders.map(f => f.id)
-        const { data: folderItems } = await supabase
-          .from('folder_items')
-          .select('id, image_url, title, created_at')
-          .in('folder_id', folderIds)
-          .order('created_at', { ascending: false })
-
-        if (folderItems) {
-            const mappedFolderItems = folderItems.map(item => ({
-                id: item.id,
-                image_url: item.image_url,
-                name: item.title,
-                created_at: item.created_at
-            }))
-            combinedItems = [...combinedItems, ...mappedFolderItems]
-        }
-      }
-
-      // 2. Fetch Mood Board Items (added_by user)
-      const { data: moodItems } = await supabase
-        .from('mood_board_items')
-        .select('id, image_url, name, created_at')
-        .eq('added_by', user.id)
-        .order('created_at', { ascending: false })
-      
-      if (moodItems) {
-           const mappedMoodItems = moodItems.map(item => ({
-                id: item.id,
-                image_url: item.image_url,
-                name: item.name,
-                created_at: item.created_at
-            }))
-            combinedItems = [...combinedItems, ...mappedMoodItems]
-      }
-      
-      // Deduplicate by image_url
-      const uniqueUrls = new Set()
-      const distinctItems: LibraryItem[] = []
-      for (const item of combinedItems) {
-          if (!uniqueUrls.has(item.image_url)) {
-              uniqueUrls.add(item.image_url)
-              distinctItems.push(item)
-          }
-      }
-      
-      // Sort by date (newest first)
-      distinctItems.sort((a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime())
-      
-      console.log('Final combined items:', distinctItems)
-      setItems(distinctItems)
-      setFetching(false)
-      return
-    }
-
-    // Fallback: fetch from mood_board_items for current session
-    console.log('Falling back to mood_board_items for session:', sessionId)
-    if (sessionId) {
-      const { data, error } = await supabase
-        .from('mood_board_items')
-        .select('id, image_url, name, created_at')
-        .eq('session_id', sessionId)
-        .order('created_at', { ascending: false })
-
-      console.log('Mood board items query result:', { data, error })
-
-      if (error) {
-        console.error('Error fetching mood board items:', error)
-        setItems([])
-      } else {
-        setItems(data || [])
-      }
+    if (error) {
+      console.error('Error fetching library:', error)
     } else {
-      setItems([])
+      setItems(data || [])
     }
-
     setFetching(false)
   }
 
@@ -217,87 +114,177 @@ export default function LibraryPage() {
     const keywords = objectSearchQuery.trim().split(/[\s,]+/).filter(Boolean).join(',')
     
     try {
-        const userIdParam = user?.id ? `&user_id=${user.id}` : '';
-        const response = await fetch(`https://maxipad.app.n8n.cloud/webhook/457696f7-6548-483e-8650-acd779cbbc60?user_input=${encodeURIComponent(keywords)}${userIdParam}`)
+        const response = await fetch(`https://maxipad.app.n8n.cloud/webhook/457696f7-6548-483e-8650-acd779cbbc60?user_input=${encodeURIComponent(keywords)}`)
         
         if (response.ok) {
             const data = await response.json()
             console.log("Raw object search response:", data);
             
-            const foundItems: LibraryItem[] = [];
+            const itemsToFind: { value: string, type: 'id' | 'mask_url' | 'storage_path' | 'full_url' }[] = [];
 
-            // Helper to recursively flatten and parse
-            const normalizeArray = (input: any): string[] => {
-                if (Array.isArray(input)) {
-                    return input.flatMap(normalizeArray);
-                }
-                if (typeof input === 'string') {
-                    // Try parsing if it looks like a JSON array
-                    if (input.trim().startsWith('[') && input.trim().endsWith(']')) {
-                        try {
-                            const parsed = JSON.parse(input);
-                            return normalizeArray(parsed);
-                        } catch (e) {
-                            return [input];
+            const processEntry = (entry: any) => {
+                if (typeof entry === 'string') {
+                    if (entry.startsWith('http')) {
+                         itemsToFind.push({ value: entry, type: 'full_url' });
+                    } else if (entry.startsWith('uploads/')) { 
+                        itemsToFind.push({ value: entry, type: 'storage_path' });
+                    } else {
+                        itemsToFind.push({ value: entry, type: 'mask_url' });
+                    }
+                } else if (typeof entry === 'object' && entry !== null) {
+                    // Check for 'Link' or 'link' array or string
+                    const link = entry.Link || entry.link;
+                    if (link) {
+                        const links = Array.isArray(link) ? link : [link];
+                        links.forEach((url: string) => {
+                             if (typeof url === 'string' && url.startsWith('http')) {
+                                 itemsToFind.push({ value: url, type: 'full_url' });
+                             }
+                        });
+                    }
+
+                    if (entry.imageid) {
+                         itemsToFind.push({ value: entry.imageid, type: 'id' });
+                    } else if (entry.mask_url) {
+                         itemsToFind.push({ value: entry.mask_url, type: 'mask_url' });
+                    } else if (entry.path && typeof entry.path === 'string' && entry.path.startsWith('uploads/')) {
+                        itemsToFind.push({ value: entry.path, type: 'storage_path' });
+                    } else if (entry.id && typeof entry.id === 'string') {
+                        if (entry.id.startsWith('http')) {
+                             itemsToFind.push({ value: entry.id, type: 'full_url' });
+                        } else if (entry.id.includes('/')) {
+                             itemsToFind.push({ value: entry.id, type: 'storage_path' });
+                        } else {
+                             itemsToFind.push({ value: entry.id, type: 'id' });
                         }
                     }
-                    return [input];
                 }
-                return [];
-            };
-
-            const processPairedArrays = async (linkRaw: any, oldRaw: any) => {
-                const links = normalizeArray(linkRaw);
-                const olds = normalizeArray(oldRaw);
-
-                if (links.length === 0 || olds.length === 0) return;
-                
-                // We assume the flattened arrays match index-wise, 
-                // but if lengths differ, we iterate up to the shorter one.
-                const count = Math.min(links.length, olds.length);
-
-                for (let i = 0; i < count; i++) {
-                    const maskUrl = links[i];
-                    const originalImageUrl = olds[i];
-
-                    if (!originalImageUrl) continue;
-
-                    let publicUrl = originalImageUrl;
-                    // Fix Supabase URL if missing '/public/' segment
-                    if (publicUrl.includes('/storage/v1/object/uploads/') && !publicUrl.includes('/storage/v1/object/public/uploads/')) {
-                         publicUrl = publicUrl.replace('/storage/v1/object/uploads/', '/storage/v1/object/public/uploads/');
-                    }
-
-                    // Find the item in the DB using the ORIGINAL image URL
-                    const foundItem = await findLibraryItemByImageUrl(publicUrl);
-                    
-                    if (foundItem) {
-                        foundItems.push({
-                            ...foundItem,
-                            image_url: maskUrl, // Display the mask
-                            name: foundItem.name || 'Detected Object'
-                        });
-                    } else {
-                        console.log(`Original item not found in DB: ${publicUrl}`);
-                    }
-                }
-            };
-
-            // Check if data is array and has the structure
-            if (Array.isArray(data) && data.length > 0) {
-                for (const entry of data) {
-                     if (entry.Link && entry.Old) {
-                         await processPairedArrays(entry.Link, entry.Old);
-                     } else {
-                         // ... (fallback omitted)
-                     }
-                }
-            } else if (data.Link && data.Old) {
-                // Handle single object response
-                await processPairedArrays(data.Link, data.Old);
+            }
+    
+            if (Array.isArray(data)) {
+                data.forEach(processEntry);
+            } else {
+                processEntry(data);
             }
 
-            console.log("Final found items:", foundItems);
+            console.log("Parsed items to find:", itemsToFind);
+
+            const foundItems: LibraryItem[] = [];
+            for (const item of itemsToFind) {
+                if (item.type === 'full_url') {
+                    let publicUrl = item.value;
+                    
+                    // Fix Supabase URL if missing '/public/' segment
+                    // Transforms: .../storage/v1/object/uploads/... -> .../storage/v1/object/public/uploads/...
+                    if (publicUrl.includes('/storage/v1/object/uploads/') && !publicUrl.includes('/storage/v1/object/public/uploads/')) {
+                         publicUrl = publicUrl.replace('/storage/v1/object/uploads/', '/storage/v1/object/public/uploads/');
+                         console.log(`Fixed Supabase URL: ${publicUrl} (Original: ${item.value})`);
+                    }
+
+                    console.log(`Processing full URL: ${publicUrl}`);
+                    const foundItem = await findLibraryItemByImageUrl(publicUrl);
+                    if (foundItem) {
+                        foundItems.push(foundItem);
+                    } else {
+                        console.log(`Item not found in DB, adding as temporary item from URL.`);
+                        foundItems.push({
+                            id: '', 
+                            image_url: publicUrl,
+                            name: 'Search Result', 
+                            created_at: new Date().toISOString()
+                        });
+                    }
+                } else if (item.type === 'storage_path') {
+                    // Normalize path: strip 'uploads/' prefix if present, as it's the bucket name
+                    let relativePath = item.value;
+                    if (relativePath.startsWith('uploads/')) {
+                        relativePath = relativePath.substring('uploads/'.length);
+                    }
+                    // Remove leading slashes
+                    relativePath = relativePath.replace(/^\/+/, '');
+                    // Remove trailing slashes
+                    relativePath = relativePath.replace(/\/+$/, '');
+
+                    console.log(`Processing storage path (item.value): ${item.value}`);
+                    console.log(`Normalized relativePath: ${relativePath}`);
+
+                    // Strategy 1: Treat as a folder and list contents
+                    let { data: files, error: storageError } = await supabase.storage
+                        .from('uploads')
+                        .list(relativePath, { limit: 100 });
+
+                    // Fallback: If 0 files, try adding a trailing slash (some buckets/configs might prefer it)
+                    if (!storageError && (!files || files.length === 0)) {
+                         console.log("No files found with clean path, trying with trailing slash...");
+                         const { data: filesWithSlash, error: errorSlash } = await supabase.storage
+                            .from('uploads')
+                            .list(relativePath + '/', { limit: 100 });
+                         
+                         if (!errorSlash && filesWithSlash && filesWithSlash.length > 0) {
+                             files = filesWithSlash;
+                             // Update relativePath to include slash for URL construction if needed
+                             // But usually constructing URL is path + / + name, so clean path is fine.
+                         }
+                    }
+
+                    if (storageError) {
+                         console.error("Error listing files:", storageError);
+                    }
+
+                    if (files && files.length > 0) {
+                        console.log(`Found ${files.length} files in folder: ${relativePath}`, files);
+                        for (const file of files) {
+                            if (file.name === '.emptyFolderPlaceholder') continue; 
+                            
+                            // constructing path: Ensure we don't double slash if relativePath is empty
+                            const filePath = relativePath ? `${relativePath}/${file.name}` : file.name;
+                            console.log(`Input to getPublicUrl (from folder file): ${filePath}`);
+
+                            const publicUrl = supabase.storage
+                                .from('uploads')
+                                .getPublicUrl(filePath).data?.publicUrl;
+                            
+                            console.log(`Public URL constructed (from folder file): ${publicUrl}`);
+                            if (publicUrl) {
+                                const foundItem = await findLibraryItemByImageUrl(publicUrl);
+                                if (foundItem) {
+                                    foundItems.push(foundItem);
+                                } else {
+                                    // Item not found in DB, but exists in storage. Create a temp item.
+                                    console.log(`Item not found in DB, adding as temporary item: ${file.name}`);
+                                    foundItems.push({
+                                        id: '', 
+                                        image_url: publicUrl,
+                                        name: file.name,
+                                        created_at: file.created_at || new Date().toISOString()
+                                    });
+                                }
+                            }
+                        }
+                    } else {
+                        // Strategy 2: Treat as a direct file
+                        // If listing failed or returned empty (and it's not just an empty folder), try direct URL
+                        console.log(`No files found in folder or list error. Trying as direct file.`);
+                        console.log(`Input to getPublicUrl (direct file): ${relativePath}`);
+                        
+                        const publicUrl = supabase.storage
+                            .from('uploads')
+                            .getPublicUrl(relativePath).data?.publicUrl;
+                        
+                        console.log(`Public URL constructed (direct file): ${publicUrl}`);
+                        const foundItem = await findLibraryItemByImageUrl(publicUrl);
+                        if (foundItem) {
+                            foundItems.push(foundItem);
+                        }
+                    }
+                } else {
+                    const result = await findLibraryItem(item.value, item.type);
+                    if (result) {
+                        foundItems.push(result);
+                    }
+                }
+            }
+            console.log("Final found items before setting state:", foundItems);
             setObjectSearchResults(foundItems);
             
         } else {
@@ -315,7 +302,7 @@ export default function LibraryPage() {
     !searchQuery
   )
 
-  if (sessionLoading || userLoading) return <div className="flex justify-center p-8"><Loader2 className="animate-spin" /></div>
+  if (sessionLoading) return <div className="flex justify-center p-8"><Loader2 className="animate-spin" /></div>
 
   return (
     <main className="min-h-screen bg-gray-50 p-8">
@@ -323,33 +310,9 @@ export default function LibraryPage() {
         
         {/* Header */}
         <header className="flex flex-col gap-4 border-b border-gray-200 pb-6">
-          <div className="flex justify-between items-center w-full">
-            <Link href="/" className="flex items-center text-sm text-gray-500 hover:text-gray-900 w-fit">
-              <ArrowLeft className="w-4 h-4 mr-1" /> Back to Vibe Board
-            </Link>
-            <div>
-               {user ? (
-                 <div className="flex items-center gap-3">
-                    <span className="text-sm text-gray-600 hidden md:inline">
-                      {user.email || 'Anonymous User'}
-                    </span>
-                    <button 
-                      onClick={handleSignOut}
-                      className="text-sm bg-gray-100 hover:bg-gray-200 px-3 py-1.5 rounded-md flex items-center gap-2 transition-colors"
-                    >
-                      <LogOut className="w-3 h-3" /> Sign Out
-                    </button>
-                 </div>
-               ) : (
-                 <button 
-                   onClick={() => setIsAuthOpen(true)}
-                   className="text-sm bg-black text-white hover:bg-gray-800 px-3 py-1.5 rounded-md flex items-center gap-2 transition-colors"
-                 >
-                   <LogIn className="w-3 h-3" /> Sign In
-                 </button>
-               )}
-            </div>
-          </div>
+          <Link href="/" className="flex items-center text-sm text-gray-500 hover:text-gray-900 w-fit">
+            <ArrowLeft className="w-4 h-4 mr-1" /> Back to Vibe Board
+          </Link>
           <div className="flex flex-col gap-4">
             <div className="flex flex-col md:flex-row justify-between items-start md:items-center gap-4">
                 <div>
@@ -397,11 +360,9 @@ export default function LibraryPage() {
                 <Upload className="w-5 h-5" /> Upload New
              </h2>
              {sessionId && (
-                <FileUploader
-                    sessionId={sessionId}
-                    userId={user?.id}
-                    folderId={folderId || undefined}
-                    onUploadComplete={fetchLibraryItems}
+                <FileUploader 
+                    sessionId={sessionId} 
+                    onUploadComplete={fetchLibraryItems} 
                 />
              )}
         </section>
@@ -450,7 +411,7 @@ export default function LibraryPage() {
         {/* Image Grid */}
         <section>
             <h2 className="text-lg font-semibold mb-3 flex items-center gap-2">
-                <ImageIcon className="w-5 h-5" /> Storage
+                <ImageIcon className="w-5 h-5" /> Recent Uploads
             </h2>
             
             {fetching ? (
@@ -481,13 +442,6 @@ export default function LibraryPage() {
         </section>
 
       </div>
-      <AuthDialog 
-        isOpen={isAuthOpen} 
-        onClose={() => setIsAuthOpen(false)}
-        onAuthSuccess={() => {
-            fetchLibraryItems()
-        }}
-      />
     </main>
   )
 }

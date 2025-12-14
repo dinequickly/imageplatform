@@ -25,6 +25,7 @@ export default function VibeBoard({ sessionId }: VibeBoardProps) {
   const [uploading, setUploading] = useState(false)
   const [fetching, setFetching] = useState(true)
   const [defaultFolderId, setDefaultFolderId] = useState<string | null>(null)
+  const [copied, setCopied] = useState(false)
 
   async function fetchItems() {
     if (!sessionId) return
@@ -162,7 +163,29 @@ export default function VibeBoard({ sessionId }: VibeBoardProps) {
   return (
     <div className="space-y-6">
       <div className="flex items-center justify-between">
-        <h2 className="text-2xl font-semibold text-gray-800">Your Vibe Board</h2>
+        <div className="flex items-center gap-3">
+          <h2 className="text-2xl font-semibold text-gray-800">Your Vibe Board</h2>
+          {sessionId && (
+            <button
+              type="button"
+              onClick={async () => {
+                try {
+                  await navigator.clipboard.writeText(sessionId)
+                  setCopied(true)
+                  setTimeout(() => setCopied(false), 1200)
+                } catch (e) {
+                  console.error('Failed to copy sessionId:', e)
+                }
+              }}
+              title={sessionId}
+              className="hidden md:inline-flex items-center gap-2 text-xs px-2.5 py-1 rounded-full border border-gray-200 bg-white text-gray-600 hover:text-gray-900 hover:border-gray-300"
+            >
+              <span className="font-mono">session</span>
+              <span className="font-mono">{sessionId.slice(0, 8)}…</span>
+              <span className="text-gray-400">{copied ? 'copied' : 'copy'}</span>
+            </button>
+          )}
+        </div>
         <div className="relative">
           <input
             type="file"
@@ -192,7 +215,7 @@ export default function VibeBoard({ sessionId }: VibeBoardProps) {
             <div key={item.id} className="group relative aspect-square bg-gray-100 rounded-lg overflow-hidden border border-gray-200">
               <Link href={`/editor/${item.id}`} className="block w-full h-full cursor-pointer">
                 <img
-                    src={item.image_url}
+                    src={`${item.image_url}?t=${new Date().getTime()}`} 
                     alt="Vibe"
                     className="w-full h-full object-cover transition-transform duration-300 group-hover:scale-105"
                 />

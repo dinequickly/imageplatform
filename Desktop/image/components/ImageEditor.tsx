@@ -6,7 +6,7 @@ import { useSession } from '@/hooks/useSession'
 import { useSupabaseUser } from '@/hooks/useSupabaseUser'
 import { getOrCreateDefaultFolderId } from '@/lib/library'
 import CanvasLayer, { CanvasLayerRef } from './CanvasLayer'
-import { ArrowLeft, Eraser, Wand2, Save, Loader2, X, Plus, RefreshCw, Scissors, Paintbrush, Brain } from 'lucide-react'
+import { ArrowLeft, Eraser, Wand2, Save, Loader2, X, Plus, RefreshCw, Scissors, Paintbrush, Brain, Trash2, Maximize } from 'lucide-react'
 import Link from 'next/link'
 import { useRouter } from 'next/navigation'
 
@@ -27,6 +27,14 @@ interface ImageDetails {
   mask_url?: string | null
 }
 
+interface DetectedObject {
+    x: number
+    y: number
+    width: number
+    height: number
+    label: string
+}
+
 export default function ImageEditor({ imageId }: ImageEditorProps) {
   const router = useRouter()
   const { sessionId } = useSession()
@@ -43,9 +51,14 @@ export default function ImageEditor({ imageId }: ImageEditorProps) {
   const [generatedImage, setGeneratedImage] = useState<string | null>(null)
   const [actionLoading, setActionLoading] = useState(false)
   
-  // SAM State
+  // SAM & Interaction State
   const [samMaskBase64, setSamMaskBase64] = useState<string | null>(null)
   const [isMaskVisible, setIsMaskVisible] = useState(false)
+  const [detectedObjects, setDetectedObjects] = useState<DetectedObject[]>([])
+  const [hoveredObjectIndex, setHoveredObjectIndex] = useState<number | null>(null)
+  const [selectedObjectIndex, setSelectedObjectIndex] = useState<number | null>(null)
+  const [menuPosition, setMenuPosition] = useState<{x: number, y: number} | null>(null)
+  const [objectPrompt, setObjectPrompt] = useState('')
 
   // Metadata State
   const [name, setName] = useState('')
@@ -58,6 +71,8 @@ export default function ImageEditor({ imageId }: ImageEditorProps) {
   useEffect(() => {
     fetchImage()
   }, [imageId])
+
+  // ... (fetchImage remains same)
 
   async function fetchImage() {
     setLoading(true)
@@ -81,16 +96,8 @@ export default function ImageEditor({ imageId }: ImageEditorProps) {
       })
       setName(boardData.name || '')
       setDescription(boardData.description || '')
-      
-      // If persisted mask exists, we can't easily load it into base64 state without fetching it.
-      // But we can draw it.
       if (boardData.mask_url) {
-          setTimeout(() => {
-              canvasRef.current?.drawBase64Mask(boardData.mask_url!)
-              // To enable toggle for persisted masks, we would need to fetch the blob here.
-              // For simplicity, we just draw it. The toggle will work only after a NEW generation 
-              // unless we implement fetch-on-load for the mask.
-          }, 500)
+          setTimeout(() => canvasRef.current?.drawBase64Mask(boardData.mask_url!), 500)
       }
       setLoading(false)
       return
@@ -102,9 +109,7 @@ export default function ImageEditor({ imageId }: ImageEditorProps) {
       .eq('id', imageId)
       .maybeSingle()
 
-    if (libraryError) {
-      console.error('Error fetching folder item:', libraryError)
-    } else if (libraryData) {
+    if (libraryData) {
       setImage({
         id: libraryData.id,
         image_url: libraryData.image_url,
@@ -116,11 +121,8 @@ export default function ImageEditor({ imageId }: ImageEditorProps) {
       })
       setName(libraryData.title || '')
       setDescription(libraryData.description || '')
-      
       if (libraryData.mask_url) {
-          setTimeout(() => {
-              canvasRef.current?.drawBase64Mask(libraryData.mask_url!)
-          }, 500)
+          setTimeout(() => canvasRef.current?.drawBase64Mask(libraryData.mask_url!), 500)
       }
     }
     setLoading(false)
@@ -133,162 +135,42 @@ export default function ImageEditor({ imageId }: ImageEditorProps) {
     }
   }
 
-  async function saveMetadata() {
-    if (!imageId) return
-    setSavingMeta(true)
-    const table = image?.source === 'folder_items' ? 'folder_items' : 'mood_board_items'
-    const update =
-      table === 'folder_items'
-        ? { title: name, description }
-        : { name, description }
-    const { error } = await supabase.from(table).update(update).eq('id', imageId)
-
-    if (error) {
-      console.error('Error updating metadata:', error)
-      alert('Failed to save metadata.')
-    } 
-    setSavingMeta(false)
-  }
-
   async function uploadBase64Image(base64Data: string, pathPrefix: string) {
     const res = await fetch(base64Data.startsWith('data:') ? base64Data : `data:image/png;base64,${base64Data}`)
     const blob = await res.blob()
-    const fileExt = 'png' // Masks are usually png
-    const fileName = `${pathPrefix}/${Math.random()}.${fileExt}`
-    
-    const { error: uploadError } = await supabase.storage
-      .from('uploads')
-      .upload(fileName, blob)
-
-    if (uploadError) throw uploadError
-
-    const { data: { publicUrl } } = supabase.storage
-      .from('uploads')
-      .getPublicUrl(fileName)
-      
-    return publicUrl
+    const fileName = `${pathPrefix}/${Math.random()}.png`
+    const { error } = await supabase.storage.from('uploads').upload(fileName, blob)
+    if (error) throw error
+    const { data } = supabase.storage.from('uploads').getPublicUrl(fileName)
+    return data.publicUrl
   }
-
+  
   async function saveMaskToDB(base64Mask: string) {
       if (!image) return
       try {
-          const pathPrefix = (image.session_id || sessionId || 'uploads') + '/masks'
-          const publicUrl = await uploadBase64Image(base64Mask, pathPrefix)
-          
-          const table = image.source === 'folder_items' ? 'folder_items' : 'mood_board_items'
-          const { error } = await supabase
-            .from(table)
-            .update({ mask_url: publicUrl })
-            .eq('id', image.id)
-            
-          if (error) throw error
-          console.log('Mask saved to DB:', publicUrl)
-      } catch (err) {
-          console.error('Failed to save mask:', err)
-      }
+        const url = await uploadBase64Image(base64Mask, (image.session_id||'temp') + '/masks')
+        const table = image.source === 'folder_items' ? 'folder_items' : 'mood_board_items'
+        await supabase.from(table).update({ mask_url: url }).eq('id', image.id)
+      } catch (e) { console.error(e) }
   }
 
-  async function handleSAMSegment(textPrompt: string) {
-    if (!image) return
-    setIsProcessing(true)
-    setToolMode('brush') // Switch back to brush immediately so cursor is normal
-    
-    try {
-        const apiRes = await fetch('/api/segment', {
-            method: 'POST',
-            headers: {
-                'Content-Type': 'application/json'
-            },
-            body: JSON.stringify({
-                imageUrl: image.image_url,
-                prompt: textPrompt 
-            })
-        })
-        
-        const responseText = await apiRes.text()
-        let data
-        
-        try {
-            data = JSON.parse(responseText)
-        } catch (e) {
-            console.error('Failed to parse API response:', responseText)
-            alert(`API Error: ${apiRes.status} ${apiRes.statusText}\nRaw: ${responseText.substring(0, 100)}...`)
-            setIsProcessing(false)
-            return
-        }
-
-        console.log('Roboflow Response:', data)
-
-        if (apiRes.ok && data.success && data.result) {
-            const outputs = data.result.outputs
-            if (outputs && Array.isArray(outputs)) {
-                let foundMask = false
-                outputs.forEach((out: any) => {
-                    Object.values(out).forEach((val: any) => {
-                        if (val && val.type === 'base64' && val.value) {
-                            canvasRef.current?.drawBase64Mask(val.value)
-                            saveMaskToDB(val.value)
-                            setSamMaskBase64(val.value)
-                            setIsMaskVisible(true)
-                            foundMask = true
-                        }
-                    })
-                    
-                    if (!foundMask && out.image && out.image.type === 'base64') {
-                        canvasRef.current?.drawBase64Mask(out.image.value)
-                        saveMaskToDB(out.image.value)
-                        setSamMaskBase64(out.image.value)
-                        setIsMaskVisible(true)
-                        foundMask = true
-                    }
-                })
-                
-                if (!foundMask) {
-                    console.warn('No image outputs found in Roboflow response', outputs)
-                    alert('Workflow finished but returned no visual masks.')
-                }
-            } else {
-                 console.warn('Unknown Roboflow structure', data.result)
-                 alert('Segmentation finished. Check console for output.')
-            }
-            
-        } else {
-            const errorMsg = data.error || data.details || 'Unknown error'
-            console.error('Segmentation Error:', data)
-            alert(`Segmentation failed: ${errorMsg}`)
-        }
-        
-    } catch (err) {
-        console.error('SAM Request failed:', err)
-        alert('Failed to connect to segmentation service.')
-    } finally {
-        setIsProcessing(false)
-    }
-  }
-
-  const toggleSamMask = () => {
-      if (!samMaskBase64) return
-      
-      if (isMaskVisible) {
-          clearMask()
-          setIsMaskVisible(false)
-      } else {
-          canvasRef.current?.drawBase64Mask(samMaskBase64)
-          setIsMaskVisible(true)
-      }
-  }
-
-  async function handleGenerate(overridePrompt?: string) {
+  async function handleGenerate(overridePrompt?: string, overrideMask?: string) {
       const finalPrompt = overridePrompt || prompt
-      if (!finalPrompt) return
+      const finalMask = overrideMask || canvasRef.current?.getMaskDataURL()?.split(',')[1] || null
       
+      if (!finalPrompt) return
       setIsProcessing(true)
+      // Do NOT clear generatedImage here if we want to show a loading state over the old one, 
+      // but for now let's clear it so we don't see the old result while waiting for new.
+      // actually, let's keep it null so the main image shows.
       setGeneratedImage(null)
 
       try {
-        const mask = canvasRef.current?.getMaskDataURL() || null
-        
         let imageBase64 = null
+        // If we have a generated image "committed" but not saved, we might want to edit THAT.
+        // But here we are editing the BASE image.
+        // If the user wants to chain edits, they should "Save" (Replace Original) first.
+        
         if (image?.image_url) {
             const response = await fetch(image.image_url)
             const blob = await response.blob()
@@ -304,32 +186,197 @@ export default function ImageEditor({ imageId }: ImageEditorProps) {
             headers: { 'Content-Type': 'application/json' },
             body: JSON.stringify({
                 prompt: finalPrompt,
-                mask,
+                mask: finalMask,
                 image: imageBase64,
                 model: 'gemini-3-pro-image-preview'
             })
         })
 
         const data = await response.json()
-        
         if (data.success && data.imageData) {
             setGeneratedImage(data.imageData)
-        } else if (data.error) {
-            alert(`Error: ${data.details || data.error}`)
+            setSelectedObjectIndex(null) // Deselect object after generation
+            setMenuPosition(null)
+            setObjectPrompt('')
         } else {
-            alert('Unknown error occurred or no image returned.')
+            alert(`Error: ${data.details || data.error}`)
         }
-
       } catch (err) {
-          console.error('Generation failed:', err)
-          alert('Failed to generate edit.')
+          console.error(err)
+          alert('Generation failed')
       } finally {
         setIsProcessing(false)
       }
   }
 
-  const clearMask = () => {
-    canvasRef.current?.clear()
+  async function handleSAMSegment(textPrompt: any) {
+    if (!image) return
+    setIsProcessing(true)
+    setToolMode('brush') 
+    setDetectedObjects([])
+    
+    try {
+        const apiRes = await fetch('/api/segment', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ imageUrl: image.image_url, prompt: textPrompt })
+        })
+        
+        const responseText = await apiRes.text()
+        let data
+        try { data = JSON.parse(responseText) } catch (e) { throw new Error(responseText) }
+
+        console.log('Roboflow Response:', data)
+
+        if (apiRes.ok && data.success && data.result) {
+            const outputs = data.result.outputs
+            const objects: DetectedObject[] = []
+            
+            if (outputs && Array.isArray(outputs)) {
+                let foundMask = false
+                outputs.forEach((out: any) => {
+                    Object.values(out).forEach((val: any) => {
+                        if (val && val.type === 'base64' && val.value) {
+                            canvasRef.current?.drawBase64Mask(val.value)
+                            saveMaskToDB(val.value)
+                            setSamMaskBase64(val.value)
+                            setIsMaskVisible(true)
+                            foundMask = true
+                        }
+                    })
+                    if (!foundMask && out.image && out.image.type === 'base64') {
+                        canvasRef.current?.drawBase64Mask(out.image.value)
+                        saveMaskToDB(out.image.value)
+                        setSamMaskBase64(out.image.value)
+                        setIsMaskVisible(true)
+                        foundMask = true
+                    }
+
+                    if (typeof out.x === 'number' && typeof out.y === 'number') {
+                        objects.push({
+                            x: out.x - out.width / 2, 
+                            y: out.y - out.height / 2,
+                            width: out.width,
+                            height: out.height,
+                            label: out.class || 'object'
+                        })
+                    }
+                    if (out.predictions && Array.isArray(out.predictions)) {
+                        out.predictions.forEach((p: any) => {
+                             objects.push({
+                                x: p.x - p.width / 2,
+                                y: p.y - p.height / 2,
+                                width: p.width,
+                                height: p.height,
+                                label: p.class || 'object'
+                            })
+                        })
+                    }
+                })
+                
+                if (objects.length > 0) {
+                    setDetectedObjects(objects)
+                    setToolMode('sam') 
+                } 
+            } 
+        } 
+    } catch (err) {
+        console.error('SAM Error:', err)
+        alert('Segmentation failed.')
+    } finally {
+        setIsProcessing(false)
+    }
+  }
+
+  const handleMouseMove = (e: React.MouseEvent<HTMLDivElement>) => {
+      // If we have a selection, don't update hover or menu
+      if (selectedObjectIndex !== null) return
+      
+      if (detectedObjects.length === 0 || toolMode !== 'sam') return
+
+      const rect = e.currentTarget.getBoundingClientRect()
+      const x = e.clientX - rect.left
+      const y = e.clientY - rect.top
+
+      const hitIndex = detectedObjects.findIndex(obj => 
+          x >= obj.x && x <= obj.x + obj.width &&
+          y >= obj.y && y <= obj.y + obj.height
+      )
+
+      if (hitIndex !== -1) {
+          if (hoveredObjectIndex !== hitIndex) {
+              setHoveredObjectIndex(hitIndex)
+              // Don't set menu position on hover anymore, only on click
+              
+              if (samMaskBase64) {
+                  canvasRef.current?.clear()
+                  canvasRef.current?.drawBase64Mask(samMaskBase64) 
+                  const obj = detectedObjects[hitIndex]
+                  setTimeout(() => canvasRef.current?.highlightBox(obj.x, obj.y, obj.width, obj.height), 10)
+              }
+          }
+      } else {
+          if (hoveredObjectIndex !== null) {
+              setHoveredObjectIndex(null)
+              if (samMaskBase64) {
+                  canvasRef.current?.clear()
+                  canvasRef.current?.drawBase64Mask(samMaskBase64)
+              }
+          }
+      }
+  }
+  
+  const handleCanvasClick = (e: React.MouseEvent<HTMLDivElement>) => {
+      if (detectedObjects.length === 0 || toolMode !== 'sam') return
+      
+      // If we already have a selection, clicking elsewhere (or same) might verify
+      // For now, let's allow re-clicking to select/move
+      
+      if (hoveredObjectIndex !== null) {
+          setSelectedObjectIndex(hoveredObjectIndex)
+          setMenuPosition({ x: e.clientX, y: e.clientY })
+      } else {
+          // Clicked outside, clear selection
+          setSelectedObjectIndex(null)
+          setMenuPosition(null)
+          setObjectPrompt('')
+      }
+  }
+
+  async function handleObjectSubmit(e: React.FormEvent) {
+      e.preventDefault()
+      if (selectedObjectIndex === null || !objectPrompt.trim()) return
+      
+      const obj = detectedObjects[selectedObjectIndex]
+      
+      const maskCanvas = document.createElement('canvas')
+      maskCanvas.width = dimensions.width
+      maskCanvas.height = dimensions.height
+      const mCtx = maskCanvas.getContext('2d')
+      if (!mCtx) return
+      
+      mCtx.fillStyle = 'black'
+      mCtx.fillRect(0, 0, dimensions.width, dimensions.height)
+      
+      mCtx.fillStyle = 'white'
+      mCtx.fillRect(obj.x, obj.y, obj.width, obj.height)
+      
+      const maskBase64 = maskCanvas.toDataURL('image/png').split(',')[1]
+      
+      handleGenerate(objectPrompt, maskBase64)
+  }
+  
+  const clearMask = () => canvasRef.current?.clear()
+  
+  const toggleSamMask = () => {
+      if (!samMaskBase64) return
+      if (isMaskVisible) {
+          clearMask()
+          setIsMaskVisible(false)
+      } else {
+          canvasRef.current?.drawBase64Mask(samMaskBase64)
+          setIsMaskVisible(true)
+      }
   }
 
   async function getTargetFolderId() {
@@ -415,31 +462,35 @@ export default function ImageEditor({ imageId }: ImageEditorProps) {
           const pathPrefix = user?.id && folderId ? `${user.id}/${folderId}` : (image.session_id || sessionId || 'uploads')
           const publicUrl = await uploadBase64Image(generatedImage, pathPrefix)
           
-          if (image.source === 'folder_items') {
-            const { error } = await supabase
-              .from('folder_items')
-              .update({
-                image_url: publicUrl,
-                description: description ? `${description}\n\nLast Edit: ${prompt}` : `Edit: ${prompt}`,
-              })
-              .eq('id', image.id)
-            if (error) throw error
-          } else {
-            const { error } = await supabase
-              .from('mood_board_items')
-              .update({
-                  image_url: publicUrl,
-                  description: description ? `${description}\n\nLast Edit: ${prompt}` : `Edit: ${prompt}`
-              })
-              .eq('id', image.id)
-            if (error) throw error
-          }
+          // 1. Update the PRIMARY source record
+          const table = image.source === 'folder_items' ? 'folder_items' : 'mood_board_items'
+          const { error: primaryError } = await supabase
+            .from(table)
+            .update({
+              image_url: publicUrl,
+              description: description ? `${description}\n\nLast Edit: ${prompt}` : `Edit: ${prompt}`,
+            })
+            .eq('id', image.id)
+          
+          if (primaryError) throw primaryError
+
+          // 2. Try to update corresponding record in the OTHER table (if it exists)
+          // If we edited a folder item, update any mood board item using that same image
+          // If we edited a mood board item, update any folder item using that same image
+          // (This keeps them in sync if they share the same URL, which they often do)
+          const otherTable = image.source === 'folder_items' ? 'mood_board_items' : 'folder_items'
+          await supabase
+            .from(otherTable)
+            .update({ image_url: publicUrl })
+            .eq('image_url', image.image_url) // Use OLD url to find matches
 
           alert('Photo Replaced!')
           setGeneratedImage(null)
-          fetchImage()
-          clearMask()
-          setPrompt('')
+          
+          // Force navigation back to home to see the updated board
+          router.push('/')
+          router.refresh()
+          
       } catch (err) {
           console.error('Failed to replace photo', err)
           alert('Failed to replace photo.')
@@ -448,103 +499,76 @@ export default function ImageEditor({ imageId }: ImageEditorProps) {
       }
   }
 
+  // RENAMED FUNCTION to avoid any weird cache collision
+  async function onSaveMetadata() {
+    if (!imageId) return
+    setSavingMeta(true)
+    const table = image?.source === 'folder_items' ? 'folder_items' : 'mood_board_items'
+    const update =
+      table === 'folder_items'
+        ? { title: name, description } 
+        : { name, description }
+    const { error } = await supabase.from(table).update(update).eq('id', imageId)
+
+    if (error) {
+      console.error('Error updating metadata:', error)
+      alert('Failed to save metadata.')
+    } 
+    setSavingMeta(false)
+  }
+
   if (loading) return <div className="flex items-center justify-center min-h-screen"><Loader2 className="animate-spin" /></div>
   if (!image) return <div className="p-8">Image not found</div>
 
   return (
     <div className="flex h-screen bg-gray-50 overflow-hidden relative">
       
-      {/* Generated Image Modal */}
-      {generatedImage && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-sm p-8">
-            <div className="bg-white rounded-lg p-4 max-w-4xl w-full flex flex-col gap-4 animate-in fade-in zoom-in duration-300">
-                <div className="flex justify-between items-center border-b pb-2">
-                    <h3 className="text-lg font-semibold">Generated Result</h3>
-                    <button onClick={() => setGeneratedImage(null)} className="text-gray-500 hover:text-black">
-                        <X className="w-6 h-6" />
-                    </button>
-                </div>
-                <div className="flex-1 overflow-hidden flex justify-center bg-gray-100 rounded border border-gray-200">
-                    <img src={generatedImage} alt="Generated" className="max-h-[70vh] object-contain" />
-                </div>
-                <div className="flex justify-end gap-2 pt-2">
-                     <button 
-                        onClick={() => setGeneratedImage(null)}
-                        disabled={actionLoading}
-                        className="px-4 py-2 text-gray-700 hover:bg-gray-100 rounded-md transition-colors"
-                    >
-                        Discard
-                    </button>
-                    <button 
-                        onClick={handleAddToBoard}
-                        disabled={actionLoading}
-                        className="px-4 py-2 bg-blue-600 text-white rounded-md hover:bg-blue-700 transition-colors flex items-center gap-2"
-                    >
-                        {actionLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : <Plus className="w-4 h-4" />}
-                        Add to Board
-                    </button>
-                    <button 
-                        onClick={handleReplacePhoto}
-                        disabled={actionLoading}
-                        className="px-4 py-2 bg-black text-white rounded-md hover:bg-gray-800 transition-colors flex items-center gap-2"
-                    >
-                         {actionLoading ? <Loader2 className="w-4 h-4 animate-spin" /> : <RefreshCw className="w-4 h-4" />}
-                        Replace Original
-                    </button>
-                </div>
-            </div>
-        </div>
+      {/* Object Interaction Menu */}
+      {menuPosition && selectedObjectIndex !== null && (
+          <div 
+            className="fixed z-50 bg-white shadow-xl rounded-lg p-3 border border-gray-200 animate-in fade-in zoom-in duration-200"
+            style={{ left: menuPosition.x + 15, top: menuPosition.y }}
+          >
+              <form onSubmit={handleObjectSubmit} className="flex flex-col gap-2 w-64">
+                  <span className="text-xs font-semibold text-gray-500">Edit Object</span>
+                  <input 
+                      autoFocus
+                      className="border border-gray-300 rounded px-2 py-1 text-sm focus:outline-none focus:border-black"
+                      placeholder="Replace object with..."
+                      value={objectPrompt}
+                      onChange={(e) => setObjectPrompt(e.target.value)}
+                  />
+                  <button type="submit" className="bg-black text-white text-xs py-1 rounded hover:bg-gray-800">
+                      Generate
+                  </button>
+              </form>
+          </div>
       )}
 
-      {/* LEFT SIDEBAR: Metadata */}
-      <div className="w-80 bg-white border-r border-gray-200 flex flex-col z-10 shadow-sm">
-        <div className="p-4 border-b border-gray-200">
-          <Link href="/" className="flex items-center text-sm text-gray-500 hover:text-gray-900 transition-colors">
-            <ArrowLeft className="w-4 h-4 mr-1" /> Back to Board
-          </Link>
-        </div>
-        
-        <div className="p-6 space-y-6 flex-1 overflow-y-auto">
-          <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">Name</label>
-            <input 
-              type="text" 
-              value={name} 
-              onChange={(e) => setName(e.target.value)}
-              className="w-full rounded-md border-gray-300 shadow-sm focus:border-black focus:ring-black sm:text-sm p-2 border"
-              placeholder="e.g. Summer Vibe"
-            />
+      {/* Sidebar & Canvas Layout */}
+      <div className="w-80 bg-white border-r p-6">
+          <Link href="/" className="flex items-center text-sm mb-4"><ArrowLeft className="w-4 h-4 mr-1"/> Back</Link>
+          <div className="space-y-4">
+              <input value={name} onChange={e=>setName(e.target.value)} className="w-full border p-2 rounded" placeholder="Name"/>
+              <textarea value={description} onChange={e=>setDescription(e.target.value)} className="w-full border p-2 rounded" placeholder="Desc"/>
+              <button onClick={onSaveMetadata} className="w-full bg-black text-white p-2 rounded flex justify-center"><Save className="w-4 h-4 mr-2"/> Save</button>
           </div>
-
-          <div>
-            <label className="block text-sm font-medium text-gray-700 mb-1">Description</label>
-            <textarea 
-              value={description} 
-              onChange={(e) => setDescription(e.target.value)}
-              rows={4}
-              className="w-full rounded-md border-gray-300 shadow-sm focus:border-black focus:ring-black sm:text-sm p-2 border"
-              placeholder="Add details about this image..."
-            />
-          </div>
-
-          <button 
-            onClick={saveMetadata}
-            disabled={savingMeta}
-            className="flex items-center justify-center w-full px-4 py-2 bg-gray-900 text-white rounded-md hover:bg-gray-800 transition-colors disabled:opacity-50"
-          >
-            {savingMeta ? <Loader2 className="w-4 h-4 animate-spin mr-2" /> : <Save className="w-4 h-4 mr-2" />}
-            Save Details
-          </button>
-        </div>
       </div>
 
-      {/* CENTER: Image Canvas */}
       <div className="flex-1 bg-gray-100 flex items-center justify-center p-8 overflow-auto">
-        <div className="relative inline-block shadow-2xl rounded-lg overflow-hidden bg-white">
-          {/* Base Image */}
+        <div 
+            className="relative inline-block shadow-2xl rounded-lg overflow-hidden bg-white"
+            onMouseMove={handleMouseMove} // Mouse tracking for objects
+            onClick={handleCanvasClick}
+            onMouseLeave={() => { 
+                setHoveredObjectIndex(null); 
+                // Only clear selection if we haven't locked it, but here we only lock on click.
+                // So on mouse leave we just stop hovering.
+            }}
+        >
+          {/* Main Image or Generated Image Preview */}
           <img 
-            src={image.image_url} 
-            alt={image.name || 'Edit Target'} 
+            src={generatedImage || image.image_url} 
             crossOrigin="anonymous"
             className="block max-h-[80vh] max-w-[80vw] w-auto h-auto pointer-events-none select-none"
             onLoad={(e) => {
@@ -553,120 +577,72 @@ export default function ImageEditor({ imageId }: ImageEditorProps) {
             }}
           />
           
-          {/* Drawing Layer */}
-          <CanvasLayer
-            ref={canvasRef}
-            width={dimensions.width}
-            height={dimensions.height}
-            brushSize={brushSize}
-            mode={toolMode === 'sam' ? 'brush' : toolMode}
-            className="absolute top-0 left-0 opacity-70"
-          />
+          {/* Only show Canvas Layer (Masks) if we are NOT previewing a result */}
+          {!generatedImage && (
+              <CanvasLayer
+                ref={canvasRef}
+                width={dimensions.width}
+                height={dimensions.height}
+                brushSize={brushSize}
+                mode={toolMode === 'sam' ? 'brush' : toolMode} 
+                className="absolute top-0 left-0 opacity-70"
+              />
+          )}
+          
+          {/* Apply / Discard Overlay for Generated Image */}
+          {generatedImage && (
+              <div className="absolute inset-x-0 bottom-0 p-4 bg-gradient-to-t from-black/80 to-transparent flex justify-center gap-4 animate-in slide-in-from-bottom-4">
+                  <button 
+                      onClick={() => setGeneratedImage(null)} 
+                      className="px-4 py-2 bg-white/10 hover:bg-white/20 text-white rounded backdrop-blur-sm border border-white/20"
+                  >
+                      Discard
+                  </button>
+                  <button 
+                      onClick={handleReplacePhoto} 
+                      className="px-4 py-2 bg-blue-600 hover:bg-blue-700 text-white rounded shadow-lg"
+                  >
+                      Keep & Save
+                  </button>
+              </div>
+          )}
         </div>
 
-        {/* Floating Controls for Canvas */}
-        <div className="absolute bottom-8 left-1/2 transform -translate-x-1/2 bg-white/90 backdrop-blur-sm p-2 rounded-full shadow-lg flex items-center gap-4 border border-gray-200 z-20">
-             
-             {/* Tool Switcher */}
-             <div className="flex bg-gray-200 rounded-full p-1">
-                 <button
-                    onClick={() => setToolMode('brush')}
-                    className={`p-2 rounded-full transition-colors ${toolMode === 'brush' ? 'bg-white shadow' : 'text-gray-500 hover:text-black'}`}
-                    title="Brush Tool"
-                 >
-                    <Paintbrush className="w-4 h-4" />
-                 </button>
-                 <button
-                    onClick={() => setToolMode('lasso')}
-                    className={`p-2 rounded-full transition-colors ${toolMode === 'lasso' ? 'bg-white shadow' : 'text-gray-500 hover:text-black'}`}
-                    title="Lasso Selection"
-                 >
-                    <Scissors className="w-4 h-4" />
-                 </button>
-                 <button
-                    onClick={() => {
-                        if (isProcessing) return
-                        if (samMaskBase64) {
-                            toggleSamMask()
-                        } else {
-                            handleSAMSegment("all objects")
-                        }
-                    }}
-                    className={`p-2 rounded-full transition-colors ${toolMode === 'sam' || isMaskVisible ? 'bg-white shadow' : 'text-gray-500 hover:text-black'}`}
-                    title={samMaskBase64 ? (isMaskVisible ? "Hide Mask" : "Show Mask") : "Auto Segment"}
-                 >
-                    {isProcessing ? <Loader2 className="w-4 h-4 animate-spin" /> : <Brain className="w-4 h-4" />}
-                 </button>
-             </div>
-             
-             {/* Dynamic Content based on Tool */}
-             {toolMode === 'brush' && (
-                 <div className="flex items-center gap-3 border-l pl-4 border-gray-300">
-                    <input 
-                        type="range" 
-                        min="5" 
-                        max="100" 
-                        value={brushSize} 
-                        onChange={(e) => setBrushSize(parseInt(e.target.value))}
-                        className="w-24 h-2 bg-gray-200 rounded-lg appearance-none cursor-pointer"
-                    />
+        {/* Toolbar (Hide if showing preview) */}
+        {!generatedImage && (
+            <div className="absolute bottom-8 left-1/2 transform -translate-x-1/2 bg-white/90 p-2 rounded-full shadow-lg flex items-center gap-4 z-20">
+                 <div className="flex bg-gray-200 rounded-full p-1">
+                     <button onClick={() => setToolMode('brush')} className={`p-2 rounded-full ${toolMode === 'brush' ? 'bg-white' : ''}`}><Paintbrush className="w-4 h-4" /></button>
+                     <button onClick={() => setToolMode('lasso')} className={`p-2 rounded-full ${toolMode === 'lasso' ? 'bg-white' : ''}`}><Scissors className="w-4 h-4" /></button>
+                     <button onClick={() => {
+                         if (samMaskBase64) {
+                             if (isMaskVisible) { clearMask(); setIsMaskVisible(false) }
+                             else { canvasRef.current?.drawBase64Mask(samMaskBase64); setIsMaskVisible(true) }
+                         } else {
+                             handleSAMSegment(["object"])
+                         }
+                     }} className={`p-2 rounded-full ${toolMode === 'sam' ? 'bg-white' : ''}`}>
+                        {isProcessing ? <Loader2 className="w-4 h-4 animate-spin"/> : <Brain className="w-4 h-4"/>}
+                     </button>
                  </div>
-             )}
-
-             <div className="h-6 w-px bg-gray-300 mx-2"></div>
-             
-             <button 
-                onClick={clearMask}
-                className="text-gray-600 hover:text-red-600 transition-colors flex items-center gap-2 text-sm font-medium pr-4"
-             >
-                <Eraser className="w-4 h-4" /> Clear
-             </button>
-        </div>
+                 {toolMode === 'brush' && <input type="range" min="5" max="100" value={brushSize} onChange={e=>setBrushSize(parseInt(e.target.value))} className="w-24"/>}
+                 <button onClick={clearMask}><Eraser className="w-4 h-4"/></button>
+            </div>
+        )}
       </div>
 
-      {/* RIGHT SIDEBAR: Prompting */}
-      <div className="w-80 bg-white border-l border-gray-200 flex flex-col z-10 shadow-sm p-6">
-        <h3 className="text-lg font-semibold mb-4 text-gray-900">Edit Instruction</h3>
-        <p className="text-sm text-gray-500 mb-4">
-            {toolMode === 'lasso' ? "Circle an object to select it." : 
-             toolMode === 'sam' ? "Use AI to auto-segment objects by name." :
-             "Paint over an area to mask it."}
-        </p>
-
-        <div className="flex-1">
-            <textarea
-                value={prompt}
-                onChange={(e) => setPrompt(e.target.value)}
-                className="w-full h-32 rounded-md border-gray-300 shadow-sm focus:border-blue-500 focus:ring-blue-500 p-3 border resize-none"
-                placeholder={toolMode === 'lasso' ? "Describe what to do with the selection..." : "e.g. Replace with a snowy mountain..."}
-            />
-        </div>
-
-        <div className="space-y-3 mt-4">
-            <button
-                onClick={() => handleGenerate()}
-                disabled={!prompt || isProcessing}
-                className={`w-full py-3 px-4 rounded-lg text-white font-medium flex items-center justify-center gap-2 transition-all
-                    ${!prompt || isProcessing ? 'bg-gray-300 cursor-not-allowed' : 'bg-blue-600 hover:bg-blue-700 shadow-lg hover:shadow-xl'}
-                `}
-            >
-                {isProcessing ? <Loader2 className="animate-spin" /> : <Wand2 className="w-5 h-5" />}
-                Generate Edit
-            </button>
-
-            <button
-                onClick={() => {
-                    const bgPrompt = "Remove the background of the masked object, keep the object on a transparent background"
-                    setPrompt(bgPrompt)
-                    handleGenerate(bgPrompt)
-                }}
-                disabled={isProcessing}
-                className="w-full py-3 px-4 rounded-lg border-2 border-black text-black font-medium flex items-center justify-center gap-2 hover:bg-gray-50 transition-colors disabled:opacity-50"
-            >
-                {isProcessing ? <Loader2 className="w-4 h-4 animate-spin" /> : <Scissors className="w-4 h-4" />}
-                Remove Background
-            </button>
-        </div>
+      {/* Right Sidebar */}
+      <div className="w-80 bg-white border-l p-6 flex flex-col">
+          <h3 className="font-semibold mb-4">Edit</h3>
+          <textarea value={prompt} onChange={e=>setPrompt(e.target.value)} className="w-full h-32 border p-2 rounded mb-4" placeholder="Describe edits..."/>
+          <button onClick={()=>handleGenerate()} className="w-full bg-blue-600 text-white p-3 rounded flex justify-center items-center gap-2 mb-2">
+              {isProcessing ? <Loader2 className="animate-spin"/> : <Wand2 className="w-4 h-4"/>} Generate
+          </button>
+          {toolMode === 'lasso' && (
+              <button onClick={()=>{setPrompt("Remove background"); handleGenerate("Remove background")}} className="w-full border-2 border-black p-3 rounded flex justify-center items-center gap-2">
+                  <Scissors className="w-4 h-4"/> Remove BG
+              </button>
+          )}
       </div>
     </div>
   )
